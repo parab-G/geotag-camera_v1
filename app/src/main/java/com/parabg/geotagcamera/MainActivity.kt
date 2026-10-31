@@ -154,6 +154,12 @@ class MainActivity : AppCompatActivity() {
         window.navigationBarColor = Color.rgb(16, 25, 35)
         buildScreen()
         requestPermissionsIfNeeded()
+        worker.execute {
+            val restored = AppStore.importExistingMedia(this)
+            if (restored > 0) runOnUiThread {
+                Toast.makeText(this, "Recovered $restored earlier photo/video files from this phone. Project assignments and old private captions may need to be recreated.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     override fun onStart() {
