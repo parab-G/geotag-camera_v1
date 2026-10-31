@@ -84,13 +84,13 @@ object PdfGenerator {
                         canvas.drawText("Photograph unavailable", left + 12f, top + 24f, subPaint)
                     } else {
                         val imageArea = RectF(left + 2f, top + 2f, left + cellWidth - 2f, top + cellHeight - 2f)
-                        drawFit(canvas, image, imageArea, imagePaint)
-                        if (includeDetails) drawGeotagOverlay(context, canvas, record, imageArea, prefs, includeMaps)
+                        val fittedImage = drawFit(canvas, image, imageArea, imagePaint)
+                        if (includeDetails) drawGeotagOverlay(context, canvas, record, fittedImage, prefs, includeMaps)
                         image.recycle()
                     }
                 }
                 canvas.drawLine(margin, footerTop - 3f, pageWidth - margin, footerTop - 3f, linePaint)
-                drawBrandMark(canvas, margin, footerTop + 1f, 17f)
+                drawBrandMark(context, canvas, margin, footerTop + 1f, 17f)
                 subPaint.textSize = 8f
                 canvas.drawText("Generated using GeoTag Worksite Camera", margin + 23f, footerTop + 13f, subPaint)
                 val pageText = "Page ${pageNo + 1} of $totalPages"
@@ -187,19 +187,17 @@ object PdfGenerator {
         }
     }
 
-    private fun drawBrandMark(canvas: Canvas, x: Float, y: Float, size: Float) {
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(18, 38, 59) }
-        canvas.drawRoundRect(RectF(x, y, x + size, y + size), 3f, 3f, bg)
-        val yellow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 194, 71) }
-        val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-        val red = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(220, 53, 69) }
-        canvas.drawArc(RectF(x + size*.18f, y + size*.08f, x + size*.82f, y + size*.61f), 180f, 180f, true, yellow)
-        canvas.drawRoundRect(RectF(x + size*.14f, y + size*.43f, x + size*.86f, y + size*.85f), 2f, 2f, white)
-        canvas.drawCircle(x + size*.5f, y + size*.64f, size*.13f, bg)
-        canvas.drawCircle(x + size*.5f, y + size*.64f, size*.085f, red)
+    private fun drawBrandMark(context: Context, canvas: Canvas, x: Float, y: Float, size: Float) {
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(19, 40, 62) }
+        canvas.drawRoundRect(RectF(x, y, x + size, y + size), 3f, 3f, background)
+        val icon = context.getDrawable(R.drawable.ic_launcher_foreground)
+        if (icon != null) {
+            icon.setBounds(x.toInt(), y.toInt(), (x + size).toInt(), (y + size).toInt())
+            icon.draw(canvas)
+        }
     }
 
-    private fun drawFit(canvas: Canvas, bitmap: Bitmap, target: RectF, paint: Paint) {
+    private fun drawFit(canvas: Canvas, bitmap: Bitmap, target: RectF, paint: Paint): RectF {
         val scale = min(target.width() / bitmap.width, target.height() / bitmap.height)
         val width = bitmap.width * scale
         val height = bitmap.height * scale
@@ -208,5 +206,6 @@ object PdfGenerator {
             target.centerX() + width / 2, target.centerY() + height / 2
         )
         canvas.drawBitmap(bitmap, null, destination, paint)
+        return destination
     }
 }
