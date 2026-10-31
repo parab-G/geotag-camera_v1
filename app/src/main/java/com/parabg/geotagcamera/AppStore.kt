@@ -466,12 +466,15 @@ object AppStore {
         val tileBitmap = if (prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null)
             mapTile(context, record.latitude!!, record.longitude!!) else null
         val showMap = tileBitmap != null
+        val mapUnavailable = prefs.getBoolean("watermark_map", true) &&
+            record.latitude != null && record.longitude != null && !showMap
         val base = min(bitmap.width, bitmap.height)
         val pad = (base * .025f).coerceAtLeast(12f)
         val mapSize = (base * .19f).coerceIn(72f, 180f)
         val lines = mutableListOf<String>()
         if (prefs.getBoolean("watermark_date", true)) lines.add(record.capturedAt.replace("T", " ").take(32) + " " + record.timeZone)
         if (prefs.getBoolean("watermark_gps", true)) lines.add(fmtLocation(record))
+        if (mapUnavailable) lines.add("Map unavailable offline")
         if (prefs.getBoolean("watermark_accuracy", true) && record.accuracy != null) lines.add("Accuracy: ±${record.accuracy!!.toInt()} m")
         if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) lines.add(record.project)
         if (prefs.getBoolean("watermark_address", true) && record.address.isNotBlank()) lines.add(record.address)
