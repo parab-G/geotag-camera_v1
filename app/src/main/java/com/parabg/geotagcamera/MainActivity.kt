@@ -211,12 +211,13 @@ class MainActivity : AppCompatActivity() {
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
-                imageCapture = ImageCapture.Builder()
+                val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .setFlashMode(if (flashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF)
                     .build()
+                imageCapture = capture
                 provider.unbindAll()
-                provider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
+                provider.bindToLifecycle(this, cameraSelector, preview, capture)
                 captureButton.isEnabled = true
                 if (hasLocationPermission()) statusView.text = "Camera ready • GPS will be recorded when available."
                 else statusView.text = "Camera ready • GPS unavailable; capture remains enabled."
