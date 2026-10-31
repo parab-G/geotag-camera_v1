@@ -108,10 +108,19 @@ object PdfGenerator {
     private fun loadPhoto(context: Context, record: MediaRecord): Bitmap? {
         if (record.type != "PHOTO") return null
         return try {
-            val bitmap = context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { BitmapFactory.decodeStream(it) } ?: return null
-            val exif = try { context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { ExifInterface(it) } } catch (_: Exception) { null }
+            val uri = Uri.parse(record.uri)
+            val exif = try { context.contentResolver.openInputStream(uri)?.use { ExifInterface(it) } } catch (_: Exception) { null }
             val orientation = exif?.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
                 ?: ExifInterface.ORIENTATION_NORMAL
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            val maxDimension = max(bounds.outWidth, bounds.outHeight)
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = 1
+                while (maxDimension / inSampleSize > 2800) inSampleSize *= 2
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } ?: return null
             val matrix = Matrix()
             when (orientation) {
                 ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
@@ -119,6 +128,8 @@ object PdfGenerator {
                 ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
                 ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
                 ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
             }
             val corrected = if (!matrix.isIdentity) Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true) else bitmap
             if (corrected !== bitmap) bitmap.recycle()
