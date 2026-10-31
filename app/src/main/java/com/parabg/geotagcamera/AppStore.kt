@@ -184,7 +184,7 @@ object AppStore {
     fun fmtLocation(r: MediaRecord): String =
         if (r.latitude != null && r.longitude != null)
             "Lat: ${"%.6f".format(Locale.US, r.latitude)}  Lon: ${"%.6f".format(Locale.US, r.longitude)}"
-        else "GPS unavailable"
+        else "Location unavailable"
 
     fun mapTile(context: Context, lat: Double, lon: Double, zoom: Int = 15): Bitmap? {
         val n = 1 shl zoom
