@@ -201,6 +201,7 @@ class MainActivity : AppCompatActivity() {
             root.addView(controls, LinearLayout.LayoutParams(-1, -2))
         }
         setContentView(root)
+        setVideoMode(getSharedPreferences("camera_settings", MODE_PRIVATE).getString("default_capture_mode", "PHOTO") == "VIDEO")
         applySystemBarInsets(root)
     }
 
@@ -328,7 +329,8 @@ class MainActivity : AppCompatActivity() {
                 imageCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .setFlashMode(if (flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF)
                     .setTargetRotation(rotation).build()
-                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HD)).build()
+                val desiredQuality = if (getSharedPreferences("camera_settings", MODE_PRIVATE).getString("video_quality", "HD") == "FHD") Quality.FHD else Quality.HD
+                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(desiredQuality, Quality.HD)).build()
                 videoCapture = VideoCapture.withOutput(recorder).also { it.targetRotation = rotation }
                 p.unbindAll()
                 camera = p.bindToLifecycle(this, selector, preview, imageCapture, videoCapture)
@@ -372,7 +374,7 @@ class MainActivity : AppCompatActivity() {
                             val format = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getDefault() }
                             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, format.format(date))
                             exif.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, SimpleDateFormat("XXX", Locale.US).format(date))
-                            if (location != null) exif.setLatLong(location.latitude, location.longitude)
+                            if (location != null && getSharedPreferences("camera_settings", MODE_PRIVATE).getBoolean("exif_gps", true)) exif.setLatLong(location.latitude, location.longitude)
                             exif.saveAttributes()
                             val name = "GTC_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(date)}.jpg"
                             val values = ContentValues().apply {
