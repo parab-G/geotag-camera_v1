@@ -299,6 +299,67 @@ object AppStore {
         return b
     }
 
+
+    /** Build a transparent full-frame image layer for optional video watermark export. */
+    fun videoWatermarkBitmap(context: Context, record: MediaRecord, width: Int, height: Int): Bitmap {
+        val w = width.coerceIn(640, 1920)
+        val h = height.coerceIn(640, 1920)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val prefs = context.getSharedPreferences("camera_settings", Context.MODE_PRIVATE)
+        val base = min(w, h).toFloat()
+        val pad = (base * .025f).coerceAtLeast(16f)
+        val map = if (prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null)
+            mapTile(context, record.latitude!!, record.longitude!!) else null
+        val mapSize = if (map != null) base * .22f else 0f
+        val lines = mutableListOf<String>()
+        if (prefs.getBoolean("watermark_date", true)) lines.add(record.capturedAt.replace("T", " ") + " " + record.timeZone)
+        if (prefs.getBoolean("watermark_gps", true)) lines.add(if (record.latitude != null) fmtLocation(record) else "Location unavailable")
+        if (prefs.getBoolean("watermark_accuracy", true) && record.accuracy != null) lines.add("Accuracy ±${record.accuracy!!.toInt()} m")
+        if (prefs.getBoolean("watermark_address", true) && record.address.isNotBlank()) lines.add(record.address)
+        if (prefs.getBoolean("watermark_compass", true) && record.heading != null) lines.add("Heading ${record.heading!!.toInt()}°")
+        if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) lines.add(record.project)
+        if (prefs.getBoolean("watermark_caption", true) && record.caption.isNotBlank()) lines.add(record.caption)
+        if (lines.isEmpty()) lines.add("GeoTag Worksite Camera")
+        val font = (base * .035f * prefs.getInt("watermark_text_scale", 100) / 100f).coerceIn(17f, 34f)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = font; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+        val lineHeight = font * 1.35f
+        val maxTextWidth = (w * .62f - mapSize - pad * 3).coerceAtLeast(180f)
+        val fittedLines = lines.take(7).map { value ->
+            var line = value
+            while (paint.measureText(line) > maxTextWidth && line.length > 12) line = line.dropLast(3) + "…"
+            line
+        }
+        val heightNeeded = max(mapSize, fittedLines.size * lineHeight) + pad * 2
+        val widthNeeded = min(w * .78f, maxTextWidth + mapSize + pad * 3)
+        val right = prefs.getBoolean("watermark_right", false)
+        val left = if (right) w - widthNeeded - pad else pad
+        val top = h - heightNeeded - pad
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            alpha = prefs.getInt("watermark_alpha", 80).coerceIn(35, 95) * 255 / 100
+        }
+        canvas.drawRoundRect(RectF(left, top, left + widthNeeded, top + heightNeeded), 18f, 18f, background)
+        var textX = left + pad
+        if (map != null) {
+            val mapLeft = if (right) left + widthNeeded - mapSize - pad else left + pad
+            val rect = RectF(mapLeft, top + pad, mapLeft + mapSize, top + pad + mapSize)
+            canvas.drawBitmap(map, null, rect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            val attrib = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 10f; setShadowLayer(2f, 1f, 1f, Color.BLACK) }
+            canvas.drawText("© OpenStreetMap contributors", rect.left + 3f, rect.bottom - 4f, attrib)
+            map.recycle()
+            textX = if (right) left + pad else left + mapSize + pad * 1.5f
+        }
+        fittedLines.forEachIndexed { index, line ->
+            val textWidth = maxTextWidth
+            val oldSize = paint.textSize
+            while (paint.measureText(line) > textWidth && paint.textSize > 12f) paint.textSize -= 1f
+            canvas.drawText(line, textX, top + pad + (index + 1) * lineHeight, paint)
+            paint.textSize = oldSize
+        }
+        return bitmap
+    }
+
     fun watermarkedPhoto(context: Context, record: MediaRecord): Uri? {
         if (record.type != "PHOTO") return null
         val original = context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { BitmapFactory.decodeStream(it) } ?: return null
