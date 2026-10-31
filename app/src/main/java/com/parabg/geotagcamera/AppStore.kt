@@ -252,12 +252,15 @@ object AppStore {
         for (dy in -1..1) for (dx in -1..1) {
             val tile = mapTileXY(context, chosenZoom, centerX + dx, centerY + dy)
             if (tile != null) {
+                hasActualTile = true
                 val l = (dx + 1) * tileSize.toFloat()
                 val t = (dy + 1) * tileSize.toFloat()
                 canvas.drawBitmap(tile, null, RectF(l, t, l + tileSize, t + tileSize), paint)
                 tile.recycle()
             }
         }
+        var hasActualTile = false
+        // Only show actual tiles; never use a generic illustration as a location map.
         valid.forEachIndexed { index, record ->
             val pLat = Math.toRadians(record.latitude!!.coerceIn(-85.0, 85.0))
             val x = ((record.longitude!! + 180.0) / 360.0 * n - centerX + 1.0) * tileSize
@@ -271,7 +274,11 @@ object AppStore {
             }
         }
         paint.color = Color.WHITE; paint.textSize = size * .023f; paint.setShadowLayer(2f, 1f, 1f, Color.BLACK)
-        canvas.drawText("© OpenStreetMap contributors", 10f, size - 14f, paint)
+        if (hasActualTile) canvas.drawText("© OpenStreetMap contributors", 10f, size - 14f, paint)
+        else {
+            paint.textSize = size * .035f
+            canvas.drawText("Map unavailable offline", size * .08f, size * .52f, paint)
+        }
         return bitmap
     }
 
@@ -309,10 +316,12 @@ object AppStore {
         if (prefs.getBoolean("watermark_gps", true)) lines.add(fmtLocation(record))
         if (prefs.getBoolean("watermark_accuracy", true) && record.accuracy != null) lines.add("Accuracy: ±${record.accuracy!!.toInt()} m")
         if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) lines.add(record.project)
+        if (prefs.getBoolean("watermark_address", true) && record.address.isNotBlank()) lines.add(record.address)
+        if (prefs.getBoolean("watermark_compass", true) && record.heading != null) lines.add("Heading: ${record.heading!!.toInt()}°")
         if (prefs.getBoolean("watermark_caption", true) && record.caption.isNotBlank()) lines.add(record.caption)
         if (lines.isEmpty()) lines.add("GeoTag Worksite Camera")
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = (base * .026f).coerceIn(18f, 30f)
+            color = Color.WHITE; textSize = ((base * .026f).coerceIn(18f, 30f) * prefs.getInt("watermark_text_scale", 100) / 100f)
             setShadowLayer(3f, 1f, 1f, Color.BLACK)
         }
         val lineHeight = textPaint.textSize * 1.3f
@@ -321,7 +330,7 @@ object AppStore {
         val blockHeight = max(mapSize.takeIf { showMap } ?: 0f, lines.size * lineHeight) + pad
         val left = if (right) bitmap.width - blockWidth - pad else pad
         val top = bitmap.height - blockHeight - pad
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; alpha = 118 }
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; alpha = (prefs.getInt("watermark_alpha", 80).coerceIn(35, 95) * 255 / 100) }
         canvas.drawRoundRect(left, top, left + blockWidth, top + blockHeight, 14f, 14f, bg)
         var textX = left + pad
         if (showMap) {
