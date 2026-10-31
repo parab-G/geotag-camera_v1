@@ -37,6 +37,9 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import java.io.File
@@ -57,6 +60,32 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mapThumb: ImageView
     private lateinit var watermarkText: TextView
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    @Volatile private var latestLocation: android.location.Location? = null
+    @Volatile private var bestLocation: android.location.Location? = null
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            val incoming = result.lastLocation ?: return
+            latestLocation = incoming
+            val previous = bestLocation
+            if (incoming.accuracy <= 50f &&
+                (previous == null || previous.accuracy > incoming.accuracy ||
+                    System.currentTimeMillis() - previous.time > 90_000L)) {
+                bestLocation = incoming
+            }
+            val usable = usableLocation()
+            runOnUiThread {
+                if (::statusView.isInitialized && recording == null && !busy) {
+                    statusView.text = usable?.let { "GPS ready • ±${it.accuracy.toInt()} m • refreshing location" }
+                        ?: "Searching for a reliable GPS location…"
+                }
+                if (::watermarkText.isInitialized) {
+                    watermarkText.text = usable?.let {
+                        "${it.latitude}, ${it.longitude}\nAccuracy ±${it.accuracy.toInt()} m"
+                    } ?: "Location unavailable • capturing remains available"
+                }
+            }
+        }
+    }
     private val worker = Executors.newSingleThreadExecutor()
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
@@ -71,8 +100,11 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
 
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result[Manifest.permission.CAMERA] == true) startCamera()
-        else statusView.text = "Camera permission is required. You can still browse saved media."
+        if (result[Manifest.permission.CAMERA] == true) {
+            startCamera()
+            if (hasLocation()) startLocationUpdates()
+            else statusView.text = "Camera ready • Location unavailable; you can still capture."
+        } else statusView.text = "Camera permission is required. You can still browse saved media."
     }
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         beginVideoRecording(pendingVideoLocation, granted)
@@ -84,6 +116,16 @@ class MainActivity : AppCompatActivity() {
         window.navigationBarColor = Color.rgb(16, 25, 35)
         buildScreen()
         requestPermissionsIfNeeded()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (hasLocation()) startLocationUpdates()
+    }
+
+    override fun onPause() {
+        stopLocationUpdates()
+        super.onPause()
     }
 
     private fun buildScreen() {
@@ -216,12 +258,42 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private fun isFresh(location: android.location.Location?): Boolean =
+        location != null && System.currentTimeMillis() - location.time <= 120_000L
+
+    private fun usableLocation(): android.location.Location? =
+        bestLocation?.takeIf { isFresh(it) } ?: latestLocation?.takeIf { isFresh(it) && it.accuracy <= 100f }
+
+    private fun startLocationUpdates() {
+        if (!hasLocation()) return
+        try {
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2500L)
+                .setMinUpdateIntervalMillis(1200L)
+                .setMinUpdateDistanceMeters(2f)
+                .setWaitForAccurateLocation(false)
+                .build()
+            fused.lastLocation.addOnSuccessListener { last ->
+                if (last != null && (latestLocation == null || last.accuracy < (latestLocation?.accuracy ?: Float.MAX_VALUE))) {
+                    latestLocation = last
+                    if (last.accuracy <= 50f) bestLocation = last
+                }
+            }
+            fused.requestLocationUpdates(request, locationCallback, mainLooper)
+        } catch (_: SecurityException) {
+            if (::statusView.isInitialized) statusView.text = "Location unavailable • permission not granted"
+        } catch (_: Exception) {
+            if (::statusView.isInitialized) statusView.text = "Searching for location…"
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        try { fused.removeLocationUpdates(locationCallback) } catch (_: Exception) { }
+    }
+
+    /** Capture uses the freshest already-acquired fix and never waits for GPS before taking the photo. */
     private fun currentLocation(done: (android.location.Location?) -> Unit) {
         if (!hasLocation()) { done(null); return }
-        try {
-            fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
-                .addOnSuccessListener { done(it) }.addOnFailureListener { done(null) }
-        } catch (_: SecurityException) { done(null) }
+        done(usableLocation())
     }
 
     private fun startCamera() {
@@ -245,7 +317,12 @@ class MainActivity : AppCompatActivity() {
                     zoomLabel.text = "1.0×"
                     camera?.cameraControl?.setZoomRatio(1f.coerceIn(z.minZoomRatio, z.maxZoomRatio))
                 }
-                statusView.text = if (hasLocation()) "Camera ready • GPS will be recorded when available." else "Camera ready • GPS permission not granted; capture still works."
+                statusView.text = when {
+                    !hasLocation() -> "Camera ready • Location unavailable; capture still works."
+                    usableLocation() != null -> "GPS ready • ±${usableLocation()!!.accuracy.toInt()} m • refreshing"
+                    else -> "Searching for a reliable GPS location… • capture remains available"
+                }
+                if (hasLocation()) startLocationUpdates()
             } catch (e: Exception) { statusView.text = "Camera error: ${e.localizedMessage ?: "unable to start"}" }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -374,11 +451,22 @@ class MainActivity : AppCompatActivity() {
     private fun updateWatermark(record: MediaRecord) {
         watermarkText.text = "${record.capturedAt.replace("T", " ")}\n${AppStore.fmtLocation(record)}\n${record.accuracy?.let { "Accuracy ±${it.toInt()} m" } ?: "GPS unavailable"}"
         if (record.latitude != null && record.longitude != null) Thread {
-            val bitmap = AppStore.mapTile(this, record.latitude!!, record.longitude!!) ?: AppStore.mapPlaceholder()
-            runOnUiThread { mapThumb.setImageBitmap(bitmap) }
-        }.start()
+            val bitmap = AppStore.mapTile(this, record.latitude!!, record.longitude!!)
+            runOnUiThread {
+                if (bitmap != null) {
+                    mapThumb.visibility = View.VISIBLE
+                    mapThumb.setImageBitmap(bitmap)
+                } else {
+                    mapThumb.visibility = View.GONE
+                    watermarkText.text = watermarkText.text.toString() + "\nMap unavailable offline"
+                }
+            }
+        } else {
+            mapThumb.visibility = View.GONE
+            watermarkText.text = watermarkText.text.toString() + "\nLocation unavailable"
+        }
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    override fun onDestroy() { recording?.stop(); worker.shutdown(); super.onDestroy() }
+    override fun onDestroy() { stopLocationUpdates(); recording?.stop(); worker.shutdown(); super.onDestroy() }
 }
