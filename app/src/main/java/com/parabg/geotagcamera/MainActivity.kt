@@ -105,6 +105,12 @@ class MainActivity : AppCompatActivity() {
                 bestLocation = incoming
             }
             val usable = usableLocation()
+            if (recording != null && usable != null) {
+                val currentlyStored = videoLocation
+                if (currentlyStored == null || !isFresh(currentlyStored) || currentlyStored.accuracy > usable.accuracy) {
+                    videoLocation = usable
+                }
+            }
             runOnUiThread {
                 if (::statusView.isInitialized && recording == null && !busy) {
                     statusView.text = usable?.let { "GPS ready • ±${it.accuracy.toInt()} m • refreshing location" }
@@ -127,7 +133,7 @@ class MainActivity : AppCompatActivity() {
     private var videoMode = false
     private var recording: Recording? = null
     private var videoStartedAt = Date()
-    private var videoLocation: android.location.Location? = null
+    @Volatile private var videoLocation: android.location.Location? = null
     private var pendingVideoLocation: android.location.Location? = null
     private var busy = false
 
