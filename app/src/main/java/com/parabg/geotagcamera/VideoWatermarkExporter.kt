@@ -53,7 +53,7 @@ object VideoWatermarkExporter {
                 }
                 overlay = AppStore.videoWatermarkBitmap(app, record, width, height)
                 output = File(app.cacheDir, "GTC_Watermarked_${System.currentTimeMillis()}.mp4")
-                val bitmap = overlay
+                val bitmap = overlay ?: throw IllegalStateException("Video watermark could not be prepared")
                 main.post {
                     try {
                         val videoOverlay = BitmapOverlay.createStaticBitmapOverlay(bitmap)
