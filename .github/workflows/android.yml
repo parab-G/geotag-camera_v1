@@ -95,7 +95,7 @@ jobs:
           node-version: "22"
 
       - name: Distribute to Firebase App Distribution
-        if: ${{ env.FIREBASE_APP_ID != '' && env.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ env.FIREBASE_APP_ID != '' && env.FIREBASE_SERVICE_ACCOUNT_JSON != '' && env.FIREBASE_TESTER_GROUPS != '' }}
         env:
           APK_PATH: ${{ steps.package.outputs.apk_path }}
         run: |
