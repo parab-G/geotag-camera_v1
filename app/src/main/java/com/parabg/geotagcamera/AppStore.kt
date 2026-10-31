@@ -40,6 +40,7 @@ object AppStore {
     private fun metadataDir(context: Context) = File(context.filesDir, "metadata").apply { mkdirs() }
     private fun projectsFile(context: Context) = File(context.filesDir, "projects.json")
     private fun trashDir(context: Context) = File(context.filesDir, "trash").apply { mkdirs() }
+    private fun trashMediaDir(context: Context) = File(trashDir(context), "media").apply { mkdirs() }
 
     fun save(context: Context, record: MediaRecord) {
         val j = JSONObject().apply {
@@ -102,20 +103,49 @@ object AppStore {
 
 
     /** Soft-delete keeps the original public media item intact and moves only its app record to Trash. */
+    /**
+     * Move an item to Recently Deleted. On Android 10+ mark the app-owned MediaStore row
+     * pending so other gallery apps stop showing it. On Android 8/9, keep a private backup
+     * before removing the public MediaStore item so restore remains possible.
+     */
     fun moveToTrash(context: Context, record: MediaRecord): Boolean {
+        val sourceMetadata = File(metadataDir(context), "${record.id}.json")
+        if (!sourceMetadata.exists()) return false
+        val trashMetadata = File(trashDir(context), "${record.id}.json")
+        val mediaUri = Uri.parse(record.uri)
+        var legacyBackup: File? = null
         return try {
-            val source = File(metadataDir(context), "${record.id}.json")
-            if (!source.exists()) return false
-            val target = File(trashDir(context), "${record.id}.json")
-            source.copyTo(target, overwrite = true)
-            source.delete()
+            sourceMetadata.copyTo(trashMetadata, overwrite = true)
+            if (Build.VERSION.SDK_INT >= 29) {
+                val pending = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 1) }
+                if (context.contentResolver.update(mediaUri, pending, null, null) <= 0) {
+                    trashMetadata.delete()
+                    return false
+                }
+            } else {
+                val extension = if (record.type == "PHOTO") "jpg" else "mp4"
+                legacyBackup = File(trashMediaDir(context), "${record.id}.$extension")
+                context.contentResolver.openInputStream(mediaUri)?.use { input ->
+                    legacyBackup.outputStream().use { output -> input.copyTo(output) }
+                } ?: error("Unable to preserve the media file")
+                if (context.contentResolver.delete(mediaUri, null, null) <= 0) {
+                    legacyBackup.delete()
+                    trashMetadata.delete()
+                    return false
+                }
+            }
+            sourceMetadata.delete()
             true
-        } catch (_: Exception) { false }
+        } catch (_: Exception) {
+            legacyBackup?.delete()
+            trashMetadata.delete()
+            false
+        }
     }
 
     fun trashed(context: Context): MutableList<MediaRecord> {
         val result = mutableListOf<MediaRecord>()
-        trashDir(context).listFiles { f -> f.extension.equals("json", true) }?.forEach { file ->
+        trashDir(context).listFiles { f -> f.isFile && f.extension.equals("json", true) }?.forEach { file ->
             try {
                 val j = JSONObject(file.readText())
                 result.add(MediaRecord(
@@ -135,19 +165,67 @@ object AppStore {
     }
 
     fun restoreFromTrash(context: Context, record: MediaRecord): Boolean {
+        val source = File(trashDir(context), "${record.id}.json")
+        if (!source.exists()) return false
         return try {
-            val source = File(trashDir(context), "${record.id}.json")
-            if (!source.exists()) return false
-            source.copyTo(File(metadataDir(context), "${record.id}.json"), overwrite = true)
+            if (Build.VERSION.SDK_INT >= 29) {
+                val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                if (context.contentResolver.update(Uri.parse(record.uri), ready, null, null) <= 0) return false
+            } else {
+                val extension = if (record.type == "PHOTO") "jpg" else "mp4"
+                val backup = File(trashMediaDir(context), "${record.id}.$extension")
+                if (!backup.exists()) return false
+                val photo = record.type == "PHOTO"
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, record.name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, if (photo) "image/jpeg" else "video/mp4")
+                    if (photo) put(MediaStore.Images.Media.DATE_TAKEN, parseCapturedAtMillis(record.capturedAt))
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        val folder = if (photo) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/GeoTag Worksite Camera")
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                }
+                val collection = if (photo) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                val restored = context.contentResolver.insert(collection, values) ?: return false
+                try {
+                    backup.inputStream().use { input ->
+                        context.contentResolver.openOutputStream(restored)?.use { output -> input.copyTo(output) }
+                            ?: error("Unable to restore media")
+                    }
+                    record.uri = restored.toString()
+                    val existing = MediaStore.MediaColumns.IS_PENDING
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        val ready = ContentValues().apply { put(existing, 0) }
+                        context.contentResolver.update(restored, ready, null, null)
+                    }
+                    backup.delete()
+                } catch (e: Exception) {
+                    context.contentResolver.delete(restored, null, null)
+                    throw e
+                }
+            }
+            val destination = File(metadataDir(context), "${record.id}.json")
+            if (Build.VERSION.SDK_INT < 29) save(context, record)
+            else source.copyTo(destination, overwrite = true)
             source.delete()
             true
         } catch (_: Exception) { false }
     }
 
     fun permanentlyDeleteFromTrash(context: Context, record: MediaRecord) {
-        try { context.contentResolver.delete(Uri.parse(record.uri), null, null) } catch (_: Exception) { }
+        if (Build.VERSION.SDK_INT >= 29) {
+            try { context.contentResolver.delete(Uri.parse(record.uri), null, null) } catch (_: Exception) { }
+        } else {
+            val extension = if (record.type == "PHOTO") "jpg" else "mp4"
+            File(trashMediaDir(context), "${record.id}.$extension").delete()
+        }
         File(trashDir(context), "${record.id}.json").delete()
     }
+
+    private fun parseCapturedAtMillis(value: String): Long =
+        try { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+        catch (_: Exception) { System.currentTimeMillis() }
 
     /** Copy an original photo/video into a second, user-visible phone Gallery location. */
     fun copyOriginalToGallery(context: Context, record: MediaRecord): Uri? {
