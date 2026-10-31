@@ -134,7 +134,7 @@ object PdfGenerator {
         val pad = (base * .018f).coerceIn(5f, 12f)
         val fontSize = (base * .024f).coerceIn(7f, 13f)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = fontSize
+            color = Color.WHITE; textSize = fontSize * prefs.getInt("watermark_text_scale", 100).coerceIn(75, 140) / 100f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
         val smallLines = mutableListOf<String>()
@@ -143,7 +143,8 @@ object PdfGenerator {
             smallLines.add(if (record.latitude != null && record.longitude != null) AppStore.fmtLocation(record) else "Location unavailable")
         }
         if (prefs.getBoolean("watermark_accuracy", true) && record.accuracy != null) smallLines.add("Accuracy ±${record.accuracy!!.toInt()} m")
-        if (record.address.isNotBlank()) smallLines.add(record.address)
+        if (prefs.getBoolean("watermark_address", true) && record.address.isNotBlank()) smallLines.add(record.address)
+        if (prefs.getBoolean("watermark_compass", true) && record.heading != null) smallLines.add("Heading: ${record.heading!!.toInt()}°")
         if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) smallLines.add(record.project)
         if (prefs.getBoolean("watermark_caption", true) && record.caption.isNotBlank()) smallLines.add(record.caption)
         if (smallLines.isEmpty()) smallLines.add("GeoTag Worksite Camera")
@@ -164,7 +165,7 @@ object PdfGenerator {
         val left = if (right) imageArea.right - panelWidth - pad else imageArea.left + pad
         val top = imageArea.bottom - panelHeight - pad
         val panel = RectF(left, top, left + panelWidth, top + panelHeight)
-        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; alpha = 168 }
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; alpha = prefs.getInt("watermark_alpha", 80).coerceIn(35, 95) * 255 / 100 }
         canvas.drawRoundRect(panel, 7f, 7f, background)
         var textX = left + pad
         if (map != null) {
