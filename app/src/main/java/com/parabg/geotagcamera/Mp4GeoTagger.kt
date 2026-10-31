@@ -1,5 +1,6 @@
 package com.parabg.geotagcamera
 
+import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
@@ -34,7 +35,7 @@ object Mp4GeoTagger {
             if (trackMap.isEmpty()) return false
             muxer.start()
             val buffer = ByteBuffer.allocateDirect(bufferSize)
-            val info = MediaMuxer.BufferInfo()
+            val info = MediaCodec.BufferInfo()
             for (inputTrack in 0 until extractor.trackCount) {
                 extractor.selectTrack(inputTrack)
                 val outputTrack = trackMap[inputTrack] ?: continue
