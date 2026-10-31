@@ -69,6 +69,7 @@ class MediaDetailActivity : AppCompatActivity() {
         actions.addView(button("Share") { share() }, actionParams())
         actions.addView(button("Map") { openMap() }, actionParams())
         if (record.type == "PHOTO") actions.addView(button("Watermark copy") { exportWatermark() }, actionParams())
+        if (record.type == "VIDEO") actions.addView(button("Watermark video") { exportWatermarkedVideo() }, actionParams())
         actions.addView(button("Delete") { delete() }, actionParams())
         root.addView(actions)
         setContentView(root); applySystemBarInsets(root)
@@ -126,6 +127,18 @@ class MediaDetailActivity : AppCompatActivity() {
             }
         }
     }
+    private fun exportWatermarkedVideo() {
+        saveMetadata()
+        Toast.makeText(this, "Exporting watermarked video. This may take time and use battery.", Toast.LENGTH_LONG).show()
+        VideoWatermarkExporter.export(this, record) { result ->
+            result.onSuccess {
+                Toast.makeText(this, "Watermarked video saved to Movies / GeoTag Worksite Camera / Exports", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(this, "Video watermark export failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun delete() {
         androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Delete media?").setMessage("This deletes the saved media and its app metadata from this device.")
             .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> AppStore.delete(this, record); finish() }.show()
