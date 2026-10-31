@@ -30,12 +30,16 @@ data class MediaRecord(
     var longitude: Double? = null,
     var accuracy: Float? = null,
     var caption: String = "",
-    var project: String = ""
+    var project: String = "",
+    var address: String = "",
+    var locationStatus: String = if (latitude != null && longitude != null) "AVAILABLE" else "UNAVAILABLE",
+    var heading: Float? = null
 )
 
 object AppStore {
     private fun metadataDir(context: Context) = File(context.filesDir, "metadata").apply { mkdirs() }
     private fun projectsFile(context: Context) = File(context.filesDir, "projects.json")
+    private fun trashDir(context: Context) = File(context.filesDir, "trash").apply { mkdirs() }
 
     fun save(context: Context, record: MediaRecord) {
         val j = JSONObject().apply {
@@ -43,6 +47,8 @@ object AppStore {
             put("type", record.type); put("capturedAt", record.capturedAt); put("timeZone", record.timeZone)
             put("latitude", record.latitude ?: JSONObject.NULL); put("longitude", record.longitude ?: JSONObject.NULL)
             put("accuracy", record.accuracy ?: JSONObject.NULL); put("caption", record.caption); put("project", record.project)
+            put("address", record.address); put("locationStatus", record.locationStatus)
+            put("heading", record.heading ?: JSONObject.NULL)
         }
         File(metadataDir(context), "${record.id}.json").writeText(j.toString(2))
     }
@@ -66,7 +72,10 @@ object AppStore {
                     timeZone = j.optString("timeZone"),
                     latitude = nullableDouble("latitude"), longitude = nullableDouble("longitude"),
                     accuracy = nullableFloat("accuracy"), caption = j.optString("caption"),
-                    project = j.optString("project").takeUnless { it == "null" } ?: ""
+                    project = j.optString("project").takeUnless { it == "null" } ?: "",
+                    address = j.optString("address"),
+                    locationStatus = j.optString("locationStatus", if (nullableDouble("latitude") != null) "AVAILABLE" else "UNAVAILABLE"),
+                    heading = if (j.has("heading") && !j.isNull("heading")) j.optDouble("heading").toFloat() else null
                 ))
             } catch (_: Exception) { }
         }
@@ -89,6 +98,87 @@ object AppStore {
         val array = JSONArray()
         values.distinct().filter { it.isNotBlank() }.forEach { array.put(it) }
         projectsFile(context).writeText(array.toString(2))
+    }
+
+
+    /** Soft-delete keeps the original public media item intact and moves only its app record to Trash. */
+    fun moveToTrash(context: Context, record: MediaRecord): Boolean {
+        return try {
+            val source = File(metadataDir(context), "${record.id}.json")
+            if (!source.exists()) return false
+            val target = File(trashDir(context), "${record.id}.json")
+            source.copyTo(target, overwrite = true)
+            source.delete()
+            true
+        } catch (_: Exception) { false }
+    }
+
+    fun trashed(context: Context): MutableList<MediaRecord> {
+        val result = mutableListOf<MediaRecord>()
+        trashDir(context).listFiles { f -> f.extension.equals("json", true) }?.forEach { file ->
+            try {
+                val j = JSONObject(file.readText())
+                result.add(MediaRecord(
+                    id = j.optString("id", file.nameWithoutExtension), uri = j.optString("uri"),
+                    name = j.optString("name", "Media"), type = j.optString("type", "PHOTO"),
+                    capturedAt = j.optString("capturedAt"), timeZone = j.optString("timeZone"),
+                    latitude = if (j.isNull("latitude")) null else j.optDouble("latitude"),
+                    longitude = if (j.isNull("longitude")) null else j.optDouble("longitude"),
+                    accuracy = if (j.isNull("accuracy")) null else j.optDouble("accuracy").toFloat(),
+                    caption = j.optString("caption"), project = j.optString("project"),
+                    address = j.optString("address"), locationStatus = j.optString("locationStatus", "UNAVAILABLE"),
+                    heading = if (j.isNull("heading")) null else j.optDouble("heading").toFloat()
+                ))
+            } catch (_: Exception) { }
+        }
+        return result.sortedByDescending { it.capturedAt }.toMutableList()
+    }
+
+    fun restoreFromTrash(context: Context, record: MediaRecord): Boolean {
+        return try {
+            val source = File(trashDir(context), "${record.id}.json")
+            if (!source.exists()) return false
+            source.copyTo(File(metadataDir(context), "${record.id}.json"), overwrite = true)
+            source.delete()
+            true
+        } catch (_: Exception) { false }
+    }
+
+    fun permanentlyDeleteFromTrash(context: Context, record: MediaRecord) {
+        try { context.contentResolver.delete(Uri.parse(record.uri), null, null) } catch (_: Exception) { }
+        File(trashDir(context), "${record.id}.json").delete()
+    }
+
+    /** Copy an original photo/video into a second, user-visible phone Gallery location. */
+    fun copyOriginalToGallery(context: Context, record: MediaRecord): Uri? {
+        return try {
+            val isPhoto = record.type == "PHOTO"
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "Original_${record.name}")
+                put(MediaStore.MediaColumns.MIME_TYPE, if (isPhoto) "image/jpeg" else "video/mp4")
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val folder = if (isPhoto) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/GeoTag Worksite Camera/Original Copies")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            }
+            val collection = if (isPhoto) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val target = context.contentResolver.insert(collection, values) ?: return null
+            try {
+                context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { input ->
+                    context.contentResolver.openOutputStream(target)?.use { output -> input.copyTo(output) }
+                        ?: error("Cannot open destination")
+                } ?: error("Cannot read original media")
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                    context.contentResolver.update(target, ready, null, null)
+                }
+                target
+            } catch (e: Exception) {
+                context.contentResolver.delete(target, null, null)
+                throw e
+            }
+        } catch (_: Exception) { null }
     }
 
     fun fmtLocation(r: MediaRecord): String =
@@ -209,7 +299,8 @@ object AppStore {
         val canvas = Canvas(bitmap)
         val prefs = context.getSharedPreferences("camera_settings", Context.MODE_PRIVATE)
         val right = prefs.getBoolean("watermark_right", false)
-        val showMap = prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null
+        val tileBitmap = if (prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null) mapTile(context, record.latitude!!, record.longitude!!) else null
+        val showMap = tileBitmap != null
         val base = min(bitmap.width, bitmap.height)
         val pad = (base * .025f).coerceAtLeast(12f)
         val mapSize = (base * .19f).coerceIn(72f, 180f)
@@ -234,7 +325,7 @@ object AppStore {
         canvas.drawRoundRect(left, top, left + blockWidth, top + blockHeight, 14f, 14f, bg)
         var textX = left + pad
         if (showMap) {
-            val map = mapTile(context, record.latitude!!, record.longitude!!) ?: mapPlaceholder()
+            val map = tileBitmap!!
             val mapLeft = if (right) left + blockWidth - mapSize - pad else left + pad
             val dst = RectF(mapLeft, top + pad / 2, mapLeft + mapSize, top + pad / 2 + mapSize)
             canvas.drawBitmap(map, null, dst, Paint(Paint.ANTI_ALIAS_FLAG))
