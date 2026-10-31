@@ -440,18 +440,37 @@ object AppStore {
 
     fun watermarkedPhoto(context: Context, record: MediaRecord): Uri? {
         if (record.type != "PHOTO") return null
-        val original = context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { BitmapFactory.decodeStream(it) } ?: return null
-        val bitmap = original.copy(Bitmap.Config.ARGB_8888, true)
+        val sourceUri = Uri.parse(record.uri)
+        val decoded = context.contentResolver.openInputStream(sourceUri)?.use { BitmapFactory.decodeStream(it) } ?: return null
+        val orientation = try {
+            context.contentResolver.openInputStream(sourceUri)?.use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+                ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+        }
+        val upright = if (!matrix.isIdentity) Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true) else decoded
+        val bitmap = upright.copy(Bitmap.Config.ARGB_8888, true)
+        if (upright !== decoded) upright.recycle()
+        decoded.recycle()
         val canvas = Canvas(bitmap)
         val prefs = context.getSharedPreferences("camera_settings", Context.MODE_PRIVATE)
         val right = prefs.getBoolean("watermark_right", false)
-        val tileBitmap = if (prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null) mapTile(context, record.latitude!!, record.longitude!!) else null
+        val tileBitmap = if (prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null)
+            mapTile(context, record.latitude!!, record.longitude!!) else null
         val showMap = tileBitmap != null
         val base = min(bitmap.width, bitmap.height)
         val pad = (base * .025f).coerceAtLeast(12f)
         val mapSize = (base * .19f).coerceIn(72f, 180f)
         val lines = mutableListOf<String>()
-        if (prefs.getBoolean("watermark_date", true)) lines.add(record.capturedAt.replace("T", " ").take(32))
+        if (prefs.getBoolean("watermark_date", true)) lines.add(record.capturedAt.replace("T", " ").take(32) + " " + record.timeZone)
         if (prefs.getBoolean("watermark_gps", true)) lines.add(fmtLocation(record))
         if (prefs.getBoolean("watermark_accuracy", true) && record.accuracy != null) lines.add("Accuracy: ±${record.accuracy!!.toInt()} m")
         if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) lines.add(record.project)
@@ -460,25 +479,32 @@ object AppStore {
         if (prefs.getBoolean("watermark_caption", true) && record.caption.isNotBlank()) lines.add(record.caption)
         if (lines.isEmpty()) lines.add("GeoTag Worksite Camera")
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = ((base * .026f).coerceIn(18f, 30f) * prefs.getInt("watermark_text_scale", 100) / 100f)
+            color = Color.WHITE
+            textSize = ((base * .026f).coerceIn(18f, 30f) * prefs.getInt("watermark_text_scale", 100) / 100f)
             setShadowLayer(3f, 1f, 1f, Color.BLACK)
         }
         val lineHeight = textPaint.textSize * 1.3f
         val maxLine = lines.maxOf { textPaint.measureText(it) }
-        val blockWidth = (maxLine + if (showMap) mapSize + pad else 0f + pad * 2).coerceAtMost(bitmap.width * .94f)
+        val blockWidth = (maxLine + (if (showMap) mapSize + pad else 0f) + pad * 2).coerceAtMost(bitmap.width * .94f)
         val blockHeight = max(mapSize.takeIf { showMap } ?: 0f, lines.size * lineHeight) + pad
         val left = if (right) bitmap.width - blockWidth - pad else pad
         val top = bitmap.height - blockHeight - pad
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; alpha = (prefs.getInt("watermark_alpha", 80).coerceIn(35, 95) * 255 / 100) }
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            alpha = prefs.getInt("watermark_alpha", 80).coerceIn(35, 95) * 255 / 100
+        }
         canvas.drawRoundRect(left, top, left + blockWidth, top + blockHeight, 14f, 14f, bg)
         var textX = left + pad
         if (showMap) {
             val map = tileBitmap!!
             val mapLeft = if (right) left + blockWidth - mapSize - pad else left + pad
             val dst = RectF(mapLeft, top + pad / 2, mapLeft + mapSize, top + pad / 2 + mapSize)
-            canvas.drawBitmap(map, null, dst, Paint(Paint.ANTI_ALIAS_FLAG))
-            val attribution = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 9f; setShadowLayer(2f, 1f, 1f, Color.BLACK) }
-            canvas.drawText("© OSM", dst.left + 3, dst.bottom - 4, attribution)
+            canvas.drawBitmap(map, null, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            val attribution = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE; textSize = (mapSize * .045f).coerceAtLeast(6f)
+                setShadowLayer(2f, 1f, 1f, Color.BLACK)
+            }
+            canvas.drawText("© OpenStreetMap contributors", dst.left + 3, dst.bottom - 4, attribution)
             map.recycle()
             textX = if (right) left + pad else left + mapSize + pad * 1.5f
         }
@@ -495,14 +521,40 @@ object AppStore {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/GeoTag Worksite Camera/Exports")
+            if (Build.VERSION.SDK_INT >= 29) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/GeoTag Worksite Camera/Exports")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
         }
-        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: run {
+            bitmap.recycle()
+            return null
+        }
         return try {
-            context.contentResolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 94, it) }
+            val wrote = context.contentResolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 94, it) } ?: false
+            if (!wrote) error("Unable to write the watermarked image")
+            // Keep useful capture EXIF on the export; visible watermark remains the primary share metadata.
+            context.contentResolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
+                val exportedExif = ExifInterface(descriptor.fileDescriptor)
+                if (record.latitude != null && record.longitude != null) exportedExif.setLatLong(record.latitude!!, record.longitude!!)
+                try {
+                    val captureTime = java.time.OffsetDateTime.parse(record.capturedAt)
+                    val formatter = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+                    exportedExif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, formatter.format(Date.from(captureTime.toInstant())))
+                    exportedExif.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, captureTime.offset.id)
+                } catch (_: Exception) { }
+                if (record.address.isNotBlank()) exportedExif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, record.address)
+                exportedExif.saveAttributes()
+            }
+            if (Build.VERSION.SDK_INT >= 29) {
+                val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                context.contentResolver.update(uri, ready, null, null)
+            }
             uri
         } catch (_: Exception) {
-            context.contentResolver.delete(uri, null, null); null
-        } finally { bitmap.recycle(); original.recycle() }
+            context.contentResolver.delete(uri, null, null)
+            null
+        } finally { bitmap.recycle() }
     }
+
 }
