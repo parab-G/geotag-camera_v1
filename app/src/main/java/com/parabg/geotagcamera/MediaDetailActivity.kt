@@ -48,7 +48,7 @@ class MediaDetailActivity : AppCompatActivity() {
         preview.addView(watermark, android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or if (right) Gravity.END else Gravity.START).apply { setMargins(dp(8), dp(8), dp(8), dp(8)) })
         root.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8); bottomMargin = dp(8) })
         val detailsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(AppStore.mapPlaceholder(120)) }
+        val mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = if (record.latitude != null && record.longitude != null) android.view.View.VISIBLE else android.view.View.GONE }
         detailsRow.addView(mapThumb, LinearLayout.LayoutParams(dp(78), dp(78)))
         val metadata = TextView(this).apply {
             text = "${record.capturedAt.replace("T", " ")}\n${AppStore.fmtLocation(record)}\n${record.accuracy?.let { "Accuracy ±${it.toInt()} m" } ?: "Accuracy unavailable"}\nTimezone: ${record.timeZone}\nType: ${record.type}"
