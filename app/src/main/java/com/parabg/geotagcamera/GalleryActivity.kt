@@ -271,7 +271,11 @@ class GalleryActivity : AppCompatActivity() {
     }
 
     private fun openPdfPicker() {
-        val ids = selected.toTypedArray()
+        val ids = AppStore.all(this).filter { selected.contains(it.id) && it.type == "PHOTO" }.map { it.id }.toTypedArray()
+        if (ids.isEmpty()) {
+            Toast.makeText(this, "PDF reports support photographs only. Select photos in the Photos section.", Toast.LENGTH_LONG).show()
+            return
+        }
         startActivity(Intent(this, ReportActivity::class.java).putExtra("selectedMediaIds", ids))
     }
 
