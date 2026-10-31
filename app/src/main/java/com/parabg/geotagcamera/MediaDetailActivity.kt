@@ -73,8 +73,11 @@ class MediaDetailActivity : AppCompatActivity() {
         root.addView(actions)
         setContentView(root); applySystemBarInsets(root)
         if (record.latitude != null && record.longitude != null) io.execute {
-            val tile = AppStore.mapTile(this, record.latitude!!, record.longitude!!) ?: AppStore.mapPlaceholder()
-            runOnUiThread { mapThumb.setImageBitmap(tile) }
+            val tile = AppStore.mapTile(this, record.latitude!!, record.longitude!!)
+            runOnUiThread {
+                if (tile != null) mapThumb.setImageBitmap(tile)
+                else mapThumb.visibility = android.view.View.GONE
+            }
         }
     }
 
@@ -85,11 +88,29 @@ class MediaDetailActivity : AppCompatActivity() {
         Toast.makeText(this, "Media details saved", Toast.LENGTH_SHORT).show()
     }
     private fun share() {
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = if (record.type == "VIDEO") "video/mp4" else "image/jpeg"
-            putExtra(Intent.EXTRA_STREAM, Uri.parse(record.uri)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        saveMetadata()
+        if (record.type == "PHOTO") {
+            Toast.makeText(this, "Creating a watermarked share copy…", Toast.LENGTH_SHORT).show()
+            io.execute {
+                val shareUri = AppStore.watermarkedPhoto(this, record)
+                runOnUiThread {
+                    if (shareUri == null) Toast.makeText(this, "Could not create watermarked copy", Toast.LENGTH_LONG).show()
+                    else {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/jpeg"; putExtra(Intent.EXTRA_STREAM, shareUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(send, "Share watermarked worksite photo"))
+                    }
+                }
+            }
+        } else {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"; putExtra(Intent.EXTRA_STREAM, Uri.parse(record.uri))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Share worksite video"))
         }
-        startActivity(Intent.createChooser(send, "Share worksite ${record.type.lowercase()}"))
     }
     private fun openMap() {
         if (record.latitude == null || record.longitude == null) return Toast.makeText(this, "No GPS coordinates for this media", Toast.LENGTH_SHORT).show()
