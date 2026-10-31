@@ -159,8 +159,9 @@ object PdfGenerator {
         if (prefs.getBoolean("watermark_project", true) && record.project.isNotBlank()) smallLines.add(record.project)
         if (prefs.getBoolean("watermark_caption", true) && record.caption.isNotBlank()) smallLines.add(record.caption)
         if (smallLines.isEmpty()) smallLines.add("GeoTag Worksite Camera")
-        val map = if (includeMaps && prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null)
-            AppStore.mapTile(context, record.latitude!!, record.longitude!!) else null
+        val mapRequested = includeMaps && prefs.getBoolean("watermark_map", true) && record.latitude != null && record.longitude != null
+        val map = if (mapRequested) AppStore.mapTile(context, record.latitude!!, record.longitude!!) else null
+        if (mapRequested && map == null) smallLines.add("Map unavailable offline")
         val mapSize = if (map != null) (base * .19f).coerceIn(36f, 68f) else 0f
         val textWidth = imageArea.width() - pad * 3 - mapSize
         val lineHeight = fontSize * 1.25f
