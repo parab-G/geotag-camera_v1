@@ -169,7 +169,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setTextColor(Color.WHITE)
             setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(54, 54, 54)))
-            setOnClickListener(click)
+            setOnClickListener { view -> click(view) }
         }
 
     private fun weightedButtonParams() = LinearLayout.LayoutParams(0, dp(46), 1f).apply {
