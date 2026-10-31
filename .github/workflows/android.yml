@@ -49,7 +49,6 @@ jobs:
 
       - name: Build signed release APK
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' && env.ANDROID_KEYSTORE_PASSWORD != '' && env.ANDROID_KEY_ALIAS != '' && env.ANDROID_KEY_PASSWORD != '' }}
-        env:
         run: |
           VERSION_CODE=$((3 + GITHUB_RUN_NUMBER))
           VERSION_NAME="1.1.$GITHUB_RUN_NUMBER-dev"
@@ -96,7 +95,7 @@ jobs:
           node-version: "22"
 
       - name: Distribute to Firebase App Distribution
-        if: ${{ secrets.FIREBASE_APP_ID != '' && secrets.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ env.FIREBASE_APP_ID != '' && env.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
         env:
           APK_PATH: ${{ steps.package.outputs.apk_path }}
         run: |
