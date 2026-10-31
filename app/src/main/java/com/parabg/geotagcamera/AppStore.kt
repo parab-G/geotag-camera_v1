@@ -126,7 +126,7 @@ object AppStore {
         } catch (_: Exception) { null }
     }
 
-    fun mapOverview    fun mapOverview(context: Context, records: List<MediaRecord>, requestedSize: Int = 768): Bitmap {
+    fun mapOverview(context: Context, records: List<MediaRecord>, requestedSize: Int = 768): Bitmap {
         val valid = records.filter { it.latitude != null && it.longitude != null }
         if (valid.isEmpty()) return mapPlaceholder(requestedSize)
         val size = requestedSize
