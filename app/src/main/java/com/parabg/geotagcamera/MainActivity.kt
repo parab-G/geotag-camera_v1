@@ -180,7 +180,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(7), dp(6), dp(7), dp(6)); setBackgroundColor(0x88000000.toInt())
         }
-        mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(AppStore.mapPlaceholder(120)) }
+        mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = View.GONE }
         badge.addView(mapThumb, LinearLayout.LayoutParams(dp(58), dp(58)))
         watermarkText = TextView(this).apply {
             text = "GPS details appear after a location fix is available"
