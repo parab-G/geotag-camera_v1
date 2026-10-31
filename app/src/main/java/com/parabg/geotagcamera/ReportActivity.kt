@@ -14,6 +14,7 @@ import java.util.concurrent.Executors
 class ReportActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val selected = linkedSetOf<String>()
+    private var newestFirst = true
     private lateinit var titleInput: EditText
     private lateinit var companyInput: EditText
     private lateinit var itemCount: TextView
@@ -74,6 +75,10 @@ class ReportActivity : AppCompatActivity() {
         pickerHeader.addView(countLabel, LinearLayout.LayoutParams(0, dp(40), 1f))
         pickerHeader.addView(button("Select all") { selected.clear(); selected.addAll(eligibleRecords().map { it.id }); renderPhotoPicker() })
         pickerHeader.addView(button("Clear") { selected.clear(); renderPhotoPicker() })
+        pickerHeader.addView(button("Newest / Oldest") {
+            newestFirst = !newestFirst
+            renderPhotoPicker()
+        })
         root.addView(pickerHeader)
         photoGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(photoGrid)
@@ -106,9 +111,10 @@ class ReportActivity : AppCompatActivity() {
         renderPhotoPicker()
     }
 
-    private fun eligibleRecords(): List<MediaRecord> = records.filter {
-        includeUnassigned.isChecked || it.project.isNotBlank()
-    }.sortedByDescending { it.capturedAt }
+    private fun eligibleRecords(): List<MediaRecord> {
+        val filtered = records.filter { includeUnassigned.isChecked || it.project.isNotBlank() }
+        return if (newestFirst) filtered.sortedByDescending { it.capturedAt } else filtered.sortedBy { it.capturedAt }
+    }
 
     private fun renderPhotoPicker() {
         if (!::photoGrid.isInitialized) return
@@ -117,7 +123,11 @@ class ReportActivity : AppCompatActivity() {
         countLabel.text = "${selected.size} selected • ${eligible.size} available"
         val grouped = eligible.groupBy { it.project.ifBlank { "Unassigned" } }
         grouped.forEach { (project, items) ->
-            photoGrid.addView(sectionLabel(project + " • ${items.size}"))
+            photoGrid.addView(button("$project • ${items.size} photos • Select group") {
+                val ids = items.map { it.id }.toSet()
+                if (selected.containsAll(ids)) selected.removeAll(ids) else selected.addAll(ids)
+                renderPhotoPicker()
+            })
             val columns = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 3
             items.chunked(columns).forEach { chunk ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
