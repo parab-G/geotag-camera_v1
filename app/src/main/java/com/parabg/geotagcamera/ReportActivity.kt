@@ -34,7 +34,7 @@ class ReportActivity : AppCompatActivity() {
         passedIds = intent.getStringArrayExtra("selectedMediaIds")?.toSet()
         if (passedIds != null) selected.addAll(records.filter { passedIds!!.contains(it.id) }.map { it.id })
         else selected.addAll(records.filter { it.project.isNotBlank() }.map { it.id })
-        val rootScroll = ScrollView(this).apply { setBackgroundColor(navy); fillViewport = true }
+        val rootScroll = ScrollView(this).apply { setBackgroundColor(navy); isFillViewport = true }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(20))
         }
@@ -64,7 +64,7 @@ class ReportActivity : AppCompatActivity() {
             buttonTintList = android.content.res.ColorStateList.valueOf(yellow)
             setOnCheckedChangeListener { _, checked ->
                 if (!checked) selected.removeAll(records.filter { it.project.isBlank() }.map { it.id }.toSet())
-                else if (passedIds == null) selected.addAll(records.filter { it.project.isBlank() }.map { it.id })
+                else selected.addAll(records.filter { it.project.isBlank() }.map { it.id })
                 renderPhotoPicker()
             }
         }
@@ -157,15 +157,16 @@ class ReportActivity : AppCompatActivity() {
         val company = companyInput.text.toString().trim()
         getSharedPreferences("camera_settings", MODE_PRIVATE).edit().putString("company_name", company).apply()
         val perPage = itemSeek.progress + 1
+        val landscape = orientationGroup.checkedRadioButtonId == 2
+        val includeMap = getSharedPreferences("camera_settings", MODE_PRIVATE).getBoolean("pdf_include_map", true)
         getSharedPreferences("camera_settings", MODE_PRIVATE).edit()
             .putInt("pdf_photos_per_page", perPage)
             .putString("pdf_orientation", if (landscape) "LANDSCAPE" else "PORTRAIT").apply()
-        val landscape = orientationGroup.checkedRadioButtonId == 2
         val projectLabel = chosen.map { it.project }.filter { it.isNotBlank() }.distinct().joinToString(", ")
         Toast.makeText(this, "Generating PDF report…", Toast.LENGTH_SHORT).show()
         worker.execute {
             try {
-                val file = PdfGenerator.create(this, chosen, title, perPage, landscape, true, true, projectLabel, company)
+                val file = PdfGenerator.create(this, chosen, title, perPage, landscape, true, includeMap, projectLabel, company)
                 runOnUiThread {
                     startActivity(Intent(this, PdfPreviewActivity::class.java)
                         .putExtra("pdfPath", file.absolutePath).putExtra("pdfTitle", title))
