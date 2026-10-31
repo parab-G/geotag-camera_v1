@@ -20,7 +20,7 @@ class MapViewActivity : AppCompatActivity() {
         val all = AppStore.all(this).filter { it.latitude != null && it.longitude != null }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(12)); setBackgroundColor(Color.rgb(14, 22, 31)) }
         root.addView(TextView(this).apply { text = "Media locations"; textSize = 22f; setTextColor(Color.WHITE) })
-        val map = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(AppStore.mapPlaceholder(480)) }
+        val map = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(Color.rgb(42, 54, 67)) }
         root.addView(map, LinearLayout.LayoutParams(-1, dp(300)).apply { topMargin = dp(8); bottomMargin = dp(8) })
         val note = TextView(this).apply { text = "${all.size} geotagged items • Map tiles load when internet is available"; textSize = 11f; setTextColor(0xFFB9C7D4.toInt()) }
         root.addView(note)
