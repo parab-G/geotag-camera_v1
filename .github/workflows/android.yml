@@ -34,10 +34,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "8.13"
 
       - name: Prepare permanent signing key (when repository secrets are configured)
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
@@ -112,8 +112,8 @@ jobs:
         run: |
           {
             echo "## GeoTag Worksite Camera Android build"
-            echo "- Branch: `$GITHUB_REF_NAME`"
-            echo "- Commit: `$GITHUB_SHA`"
-            echo "- Version code: `$((3 + GITHUB_RUN_NUMBER))`"
+            echo "- Branch: $GITHUB_REF_NAME"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Version code: $((3 + GITHUB_RUN_NUMBER))"
             echo "- Release signing/Firebase distribution run only when their repository secrets are configured."
           } >> "$GITHUB_STEP_SUMMARY"
