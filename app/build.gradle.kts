@@ -9,8 +9,8 @@ android {
         applicationId = "com.parabg.geotagcamera"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.0-test1"
+        versionCode = 3
+        versionName = "1.1.0-dev"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
