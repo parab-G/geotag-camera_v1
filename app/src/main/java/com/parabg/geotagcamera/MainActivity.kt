@@ -330,7 +330,7 @@ class MainActivity : AppCompatActivity() {
                     .setFlashMode(if (flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF)
                     .setTargetRotation(rotation).build()
                 val desiredQuality = if (getSharedPreferences("camera_settings", MODE_PRIVATE).getString("video_quality", "HD") == "FHD") Quality.FHD else Quality.HD
-                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(desiredQuality, Quality.HD)).build()
+                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(desiredQuality)).build()
                 videoCapture = VideoCapture.withOutput(recorder).also { it.targetRotation = rotation }
                 p.unbindAll()
                 camera = p.bindToLifecycle(this, selector, preview, imageCapture, videoCapture)
