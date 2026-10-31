@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.location.Geocoder
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -62,6 +67,19 @@ class MainActivity : AppCompatActivity() {
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
     @Volatile private var latestLocation: android.location.Location? = null
     @Volatile private var bestLocation: android.location.Location? = null
+    @Volatile private var lastHeadingDegrees: Float? = null
+    private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
+    private val headingListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+            val rotation = FloatArray(9)
+            val orientation = FloatArray(3)
+            SensorManager.getRotationMatrixFromVector(rotation, event.values)
+            SensorManager.getOrientation(rotation, orientation)
+            lastHeadingDegrees = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val incoming = result.lastLocation ?: return
@@ -121,10 +139,14 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (hasLocation()) startLocationUpdates()
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensorManager.registerListener(headingListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
     }
 
     override fun onPause() {
         stopLocationUpdates()
+        sensorManager.unregisterListener(headingListener)
         super.onPause()
     }
 
@@ -361,6 +383,7 @@ class MainActivity : AppCompatActivity() {
                             contentResolver.openOutputStream(uri)?.use { out -> temp.inputStream().use { it.copyTo(out) } } ?: error("Cannot write photo")
                             val record = makeRecord(name, uri.toString(), "PHOTO", date, location)
                             AppStore.save(this@MainActivity, record)
+                            resolveAddress(record)
                             runOnUiThread { updateWatermark(record); startActivity(android.content.Intent(this@MainActivity, MediaDetailActivity::class.java).putExtra("mediaId", record.id)) }
                         } catch (e: Exception) { runOnUiThread { toast("Photo save failed: ${e.message}") } }
                         finally { temp.delete(); busy = false; runOnUiThread { shutter.isEnabled = true; statusView.text = "Camera ready • GPS recorded when available." } }
@@ -437,6 +460,7 @@ class MainActivity : AppCompatActivity() {
             geoFile.delete()
             val record = makeRecord(name, uri.toString(), "VIDEO", date, location)
             AppStore.save(this, record)
+            resolveAddress(record)
             runOnUiThread { startActivity(android.content.Intent(this, MediaDetailActivity::class.java).putExtra("mediaId", record.id)) }
         } catch (e: Exception) { runOnUiThread { toast("Video save failed: ${e.message}") } }
     }
@@ -447,6 +471,21 @@ class MainActivity : AppCompatActivity() {
             capturedAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply { timeZone = TimeZone.getDefault() }.format(date),
             timeZone = TimeZone.getDefault().id, latitude = location?.latitude, longitude = location?.longitude, accuracy = location?.accuracy
         )
+
+    private fun resolveAddress(record: MediaRecord) {
+        if (record.latitude == null || record.longitude == null || !Geocoder.isPresent()) return
+        worker.execute {
+            try {
+                @Suppress("DEPRECATION")
+                val address = Geocoder(this, Locale.getDefault()).getFromLocation(record.latitude!!, record.longitude!!, 1)
+                    ?.firstOrNull()?.getAddressLine(0).orEmpty()
+                if (address.isNotBlank()) {
+                    record.address = address
+                    AppStore.save(this, record)
+                }
+            } catch (_: Exception) { }
+        }
+    }
 
     private fun updateWatermark(record: MediaRecord) {
         watermarkText.text = "${record.capturedAt.replace("T", " ")}\n${AppStore.fmtLocation(record)}\n${record.accuracy?.let { "Accuracy ±${it.toInt()} m" } ?: "GPS unavailable"}"
