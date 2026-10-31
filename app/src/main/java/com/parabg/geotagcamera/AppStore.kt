@@ -70,7 +70,7 @@ object AppStore {
                 ))
             } catch (_: Exception) { }
         }
-        return list.sortedByDescending { it.capturedAt }
+        return list.sortedByDescending { it.capturedAt }.toMutableList()
     }
 
     fun find(context: Context, id: String) = all(context).firstOrNull { it.id == id }
@@ -104,26 +104,29 @@ object AppStore {
         return mapTileXY(context, zoom, x, y)
     }
 
-    private fun mapTileXY(context: Context, zoom: Int, x: Int, y: Int): Bitmap? = try {
-        val n = 1 shl zoom
-        val tileX = ((x % n) + n) % n
-        val tileY = y.coerceIn(0, n - 1)
-        val cache = File(File(context.cacheDir, "maptiles"), "$zoom-$tileX-$tileY.png")
-        if (cache.exists()) return BitmapFactory.decodeFile(cache.absolutePath)
-        val connection = (URL("https://tile.openstreetmap.org/$zoom/$tileX/$tileY.png").openConnection() as HttpURLConnection).apply {
-            connectTimeout = 3500; readTimeout = 3500
-            setRequestProperty("User-Agent", "GeoTagWorksiteCamera/1.0 Android")
-        }
-        val bitmap = connection.inputStream.use { BitmapFactory.decodeStream(it) }
-        connection.disconnect()
-        if (bitmap != null) {
-            cache.parentFile?.mkdirs()
-            cache.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
-        }
-        bitmap
-    } catch (_: Exception) { null }
+    private fun mapTileXY(context: Context, zoom: Int, x: Int, y: Int): Bitmap? {
+        return try {
+            val n = 1 shl zoom
+            val tileX = ((x % n) + n) % n
+            val tileY = y.coerceIn(0, n - 1)
+            val cache = File(File(context.cacheDir, "maptiles"), "$zoom-$tileX-$tileY.png")
+            if (cache.exists()) return BitmapFactory.decodeFile(cache.absolutePath)
+            val connection = (URL("https://tile.openstreetmap.org/$zoom/$tileX/$tileY.png").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 3500
+                readTimeout = 3500
+                setRequestProperty("User-Agent", "GeoTagWorksiteCamera/1.0 Android")
+            }
+            val bitmap = connection.inputStream.use { BitmapFactory.decodeStream(it) }
+            connection.disconnect()
+            if (bitmap != null) {
+                cache.parentFile?.mkdirs()
+                cache.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
+            }
+            bitmap
+        } catch (_: Exception) { null }
+    }
 
-    fun mapOverview(context: Context, records: List<MediaRecord>, requestedSize: Int = 768): Bitmap {
+    fun mapOverview    fun mapOverview(context: Context, records: List<MediaRecord>, requestedSize: Int = 768): Bitmap {
         val valid = records.filter { it.latitude != null && it.longitude != null }
         if (valid.isEmpty()) return mapPlaceholder(requestedSize)
         val size = requestedSize
