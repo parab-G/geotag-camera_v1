@@ -96,7 +96,7 @@ class GalleryActivity : AppCompatActivity() {
         override fun getItem(position: Int) = photos[position]
         override fun getItemId(position: Int) = position.toLong()
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val image = (convertView as? ImageView) ?: ImageView(this).apply {
+            val image = (convertView as? ImageView) ?: ImageView(this@GalleryActivity).apply {
                 layoutParams = ViewGroup.LayoutParams(dp(116), dp(116))
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(0xFF292929.toInt())
