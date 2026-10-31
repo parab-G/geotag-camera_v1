@@ -10,6 +10,7 @@
     <application
         android:allowBackup="false"
         android:label="GeoTag Worksite Camera"
+        android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity android:name=".PdfPreviewActivity" android:exported="false" />
@@ -19,12 +20,13 @@
         <activity android:name=".ProjectsActivity" android:exported="false" />
         <activity android:name=".MediaDetailActivity" android:exported="false" />
         <activity android:name=".GalleryActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".SplashActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".MainActivity" android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

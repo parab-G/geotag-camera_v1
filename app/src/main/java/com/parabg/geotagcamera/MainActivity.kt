@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.location.Geocoder
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -35,8 +40,16 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.util.Consumer
 import androidx.exifinterface.media.ExifInterface
+import androidx.window.java.layout.WindowInfoTrackerCallbackAdapter
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowLayoutInfo
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import java.io.File
@@ -56,7 +69,61 @@ class MainActivity : AppCompatActivity() {
     private lateinit var zoomLabel: TextView
     private lateinit var mapThumb: ImageView
     private lateinit var watermarkText: TextView
+    private lateinit var rootContainer: LinearLayout
+    private lateinit var previewColumn: LinearLayout
+    private lateinit var controlPanel: LinearLayout
+    private val windowTracker by lazy { WindowInfoTrackerCallbackAdapter(WindowInfoTracker.getOrCreate(this)) }
+    private val windowLayoutCallback = Consumer<WindowLayoutInfo> { info ->
+        val separatingFold = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull { it.isSeparating }
+        runOnUiThread { applyAdaptiveLayout(separatingFold) }
+    }
+    private var activeFoldingFeature: FoldingFeature? = null
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    @Volatile private var latestLocation: android.location.Location? = null
+    @Volatile private var bestLocation: android.location.Location? = null
+    @Volatile private var lastHeadingDegrees: Float? = null
+    private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
+    private val headingListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+            val rotation = FloatArray(9)
+            val orientation = FloatArray(3)
+            SensorManager.getRotationMatrixFromVector(rotation, event.values)
+            SensorManager.getOrientation(rotation, orientation)
+            lastHeadingDegrees = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            val incoming = result.lastLocation ?: return
+            latestLocation = incoming
+            val previous = bestLocation
+            if (incoming.accuracy <= 50f &&
+                (previous == null || previous.accuracy > incoming.accuracy ||
+                    System.currentTimeMillis() - previous.time > 90_000L)) {
+                bestLocation = incoming
+            }
+            val usable = usableLocation()
+            if (recording != null && usable != null) {
+                val currentlyStored = videoLocation
+                if (currentlyStored == null || !isFresh(currentlyStored) || currentlyStored.accuracy > usable.accuracy) {
+                    videoLocation = usable
+                }
+            }
+            runOnUiThread {
+                if (::statusView.isInitialized && recording == null && !busy) {
+                    statusView.text = usable?.let { "GPS ready • ±${it.accuracy.toInt()} m • refreshing location" }
+                        ?: "Searching for a reliable GPS location…"
+                }
+                if (::watermarkText.isInitialized) {
+                    watermarkText.text = usable?.let {
+                        "${it.latitude}, ${it.longitude}\nAccuracy ±${it.accuracy.toInt()} m"
+                    } ?: "Location unavailable • capturing remains available"
+                }
+            }
+        }
+    }
     private val worker = Executors.newSingleThreadExecutor()
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
@@ -66,13 +133,16 @@ class MainActivity : AppCompatActivity() {
     private var videoMode = false
     private var recording: Recording? = null
     private var videoStartedAt = Date()
-    private var videoLocation: android.location.Location? = null
+    @Volatile private var videoLocation: android.location.Location? = null
     private var pendingVideoLocation: android.location.Location? = null
     private var busy = false
 
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result[Manifest.permission.CAMERA] == true) startCamera()
-        else statusView.text = "Camera permission is required. You can still browse saved media."
+        if (result[Manifest.permission.CAMERA] == true) {
+            startCamera()
+            if (hasLocation()) startLocationUpdates()
+            else statusView.text = "Camera ready • Location unavailable; you can still capture."
+        } else statusView.text = "Camera permission is required. You can still browse saved media."
     }
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         beginVideoRecording(pendingVideoLocation, granted)
@@ -84,15 +154,46 @@ class MainActivity : AppCompatActivity() {
         window.navigationBarColor = Color.rgb(16, 25, 35)
         buildScreen()
         requestPermissionsIfNeeded()
+        worker.execute {
+            val restored = AppStore.importExistingMedia(this)
+            if (restored > 0) runOnUiThread {
+                Toast.makeText(this, "Recovered $restored earlier photo/video files from this phone. Project assignments and old private captions may need to be recreated.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        windowTracker.addWindowLayoutInfoListener(this, ContextCompat.getMainExecutor(this), windowLayoutCallback)
+    }
+
+    override fun onStop() {
+        windowTracker.removeWindowLayoutInfoListener(windowLayoutCallback)
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (hasLocation()) startLocationUpdates()
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensorManager.registerListener(headingListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    override fun onPause() {
+        stopLocationUpdates()
+        sensorManager.unregisterListener(headingListener)
+        super.onPause()
     }
 
     private fun buildScreen() {
         val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        val root = LinearLayout(this).apply {
+        rootContainer = LinearLayout(this).apply {
             orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.rgb(16, 25, 35))
         }
-        val previewColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val root = rootContainer
+        previewColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8))
             setBackgroundColor(Color.rgb(16, 25, 35))
@@ -116,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(7), dp(6), dp(7), dp(6)); setBackgroundColor(0x88000000.toInt())
         }
-        mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(AppStore.mapPlaceholder(120)) }
+        mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = View.GONE }
         badge.addView(mapThumb, LinearLayout.LayoutParams(dp(58), dp(58)))
         watermarkText = TextView(this).apply {
             text = "GPS details appear after a location fix is available"
@@ -128,16 +229,66 @@ class MainActivity : AppCompatActivity() {
             setMargins(dp(10), dp(10), dp(10), dp(10))
         })
         previewColumn.addView(frame, LinearLayout.LayoutParams(-1, 0, 1f))
-        val controls = buildControls()
-        if (landscape) {
-            root.addView(previewColumn, LinearLayout.LayoutParams(0, -1, 1f))
-            root.addView(controls, LinearLayout.LayoutParams(dp(230), -1))
-        } else {
-            root.addView(previewColumn, LinearLayout.LayoutParams(-1, 0, 1f))
-            root.addView(controls, LinearLayout.LayoutParams(-1, -2))
+        controlPanel = buildControls()
+        setContentView(rootContainer)
+        setVideoMode(getSharedPreferences("camera_settings", MODE_PRIVATE).getString("default_capture_mode", "PHOTO") == "VIDEO")
+        applySystemBarInsets(rootContainer)
+        applyAdaptiveLayout(null)
+    }
+
+    /**
+     * Adapt the camera and control panes to the actual app window. When a separating fold
+     * is present, place preview and controls in opposite panes and keep the hinge clear.
+     */
+    private fun applyAdaptiveLayout(feature: FoldingFeature?) {
+        if (!::rootContainer.isInitialized || !::previewColumn.isInitialized || !::controlPanel.isInitialized) return
+        activeFoldingFeature = feature
+        rootContainer.removeAllViews()
+        val density = resources.displayMetrics.density
+        val widthPx = (resources.configuration.screenWidthDp * density).toInt()
+            .takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val heightPx = rootContainer.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+
+        if (feature != null && feature.isSeparating && feature.orientation == FoldingFeature.Orientation.VERTICAL) {
+            val leftPane = feature.bounds.left
+            val rightPane = widthPx - feature.bounds.right
+            val hingeGap = feature.bounds.width() + dp(12)
+            if (leftPane > dp(170) && rightPane > dp(170) && leftPane + rightPane + dp(12) <= widthPx) {
+                rootContainer.orientation = LinearLayout.HORIZONTAL
+                rootContainer.addView(previewColumn, LinearLayout.LayoutParams((leftPane - dp(6)).coerceAtLeast(dp(160)), -1))
+                rootContainer.addView(View(this), LinearLayout.LayoutParams(hingeGap, -1))
+                rootContainer.addView(controlPanel, LinearLayout.LayoutParams((rightPane - dp(6)).coerceAtLeast(dp(160)), -1))
+                rootContainer.requestLayout()
+                return
+            }
         }
-        setContentView(root)
-        applySystemBarInsets(root)
+
+        if (feature != null && feature.isSeparating && feature.orientation == FoldingFeature.Orientation.HORIZONTAL) {
+            val topPane = feature.bounds.top
+            val bottomPane = heightPx - feature.bounds.bottom
+            val hingeGap = feature.bounds.height() + dp(12)
+            if (topPane > dp(140) && bottomPane > dp(170) && topPane + bottomPane + dp(12) <= heightPx) {
+                rootContainer.orientation = LinearLayout.VERTICAL
+                rootContainer.addView(previewColumn, LinearLayout.LayoutParams(-1, (topPane - dp(6)).coerceAtLeast(dp(130))))
+                rootContainer.addView(View(this), LinearLayout.LayoutParams(-1, hingeGap))
+                rootContainer.addView(controlPanel, LinearLayout.LayoutParams(-1, (bottomPane - dp(6)).coerceAtLeast(dp(160))))
+                rootContainer.requestLayout()
+                return
+            }
+        }
+
+        val wideWindow = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
+            resources.configuration.screenWidthDp >= 600
+        if (wideWindow) {
+            rootContainer.orientation = LinearLayout.HORIZONTAL
+            rootContainer.addView(previewColumn, LinearLayout.LayoutParams(0, -1, 1f))
+            rootContainer.addView(controlPanel, LinearLayout.LayoutParams(dp(260), -1))
+        } else {
+            rootContainer.orientation = LinearLayout.VERTICAL
+            rootContainer.addView(previewColumn, LinearLayout.LayoutParams(-1, 0, 1f))
+            rootContainer.addView(controlPanel, LinearLayout.LayoutParams(-1, -2))
+        }
+        rootContainer.requestLayout()
     }
 
     private fun buildControls(): LinearLayout {
@@ -216,12 +367,42 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private fun isFresh(location: android.location.Location?): Boolean =
+        location != null && System.currentTimeMillis() - location.time <= 120_000L
+
+    private fun usableLocation(): android.location.Location? =
+        bestLocation?.takeIf { isFresh(it) } ?: latestLocation?.takeIf { isFresh(it) && it.accuracy <= 100f }
+
+    private fun startLocationUpdates() {
+        if (!hasLocation()) return
+        try {
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2500L)
+                .setMinUpdateIntervalMillis(1200L)
+                .setMinUpdateDistanceMeters(2f)
+                .setWaitForAccurateLocation(false)
+                .build()
+            fused.lastLocation.addOnSuccessListener { last ->
+                if (last != null && (latestLocation == null || last.accuracy < (latestLocation?.accuracy ?: Float.MAX_VALUE))) {
+                    latestLocation = last
+                    if (last.accuracy <= 50f) bestLocation = last
+                }
+            }
+            fused.requestLocationUpdates(request, locationCallback, mainLooper)
+        } catch (_: SecurityException) {
+            if (::statusView.isInitialized) statusView.text = "Location unavailable • permission not granted"
+        } catch (_: Exception) {
+            if (::statusView.isInitialized) statusView.text = "Searching for location…"
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        try { fused.removeLocationUpdates(locationCallback) } catch (_: Exception) { }
+    }
+
+    /** Capture uses the freshest already-acquired fix and never waits for GPS before taking the photo. */
     private fun currentLocation(done: (android.location.Location?) -> Unit) {
         if (!hasLocation()) { done(null); return }
-        try {
-            fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
-                .addOnSuccessListener { done(it) }.addOnFailureListener { done(null) }
-        } catch (_: SecurityException) { done(null) }
+        done(usableLocation())
     }
 
     private fun startCamera() {
@@ -234,7 +415,8 @@ class MainActivity : AppCompatActivity() {
                 imageCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .setFlashMode(if (flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF)
                     .setTargetRotation(rotation).build()
-                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HD)).build()
+                val desiredQuality = if (getSharedPreferences("camera_settings", MODE_PRIVATE).getString("video_quality", "HD") == "FHD") Quality.FHD else Quality.HD
+                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(desiredQuality)).build()
                 videoCapture = VideoCapture.withOutput(recorder).also { it.targetRotation = rotation }
                 p.unbindAll()
                 camera = p.bindToLifecycle(this, selector, preview, imageCapture, videoCapture)
@@ -245,7 +427,12 @@ class MainActivity : AppCompatActivity() {
                     zoomLabel.text = "1.0×"
                     camera?.cameraControl?.setZoomRatio(1f.coerceIn(z.minZoomRatio, z.maxZoomRatio))
                 }
-                statusView.text = if (hasLocation()) "Camera ready • GPS will be recorded when available." else "Camera ready • GPS permission not granted; capture still works."
+                statusView.text = when {
+                    !hasLocation() -> "Camera ready • Location unavailable; capture still works."
+                    usableLocation() != null -> "GPS ready • ±${usableLocation()!!.accuracy.toInt()} m • refreshing"
+                    else -> "Searching for a reliable GPS location… • capture remains available"
+                }
+                if (hasLocation()) startLocationUpdates()
             } catch (e: Exception) { statusView.text = "Camera error: ${e.localizedMessage ?: "unable to start"}" }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -273,7 +460,7 @@ class MainActivity : AppCompatActivity() {
                             val format = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getDefault() }
                             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, format.format(date))
                             exif.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, SimpleDateFormat("XXX", Locale.US).format(date))
-                            if (location != null) exif.setLatLong(location.latitude, location.longitude)
+                            if (location != null && getSharedPreferences("camera_settings", MODE_PRIVATE).getBoolean("exif_gps", true)) exif.setLatLong(location.latitude, location.longitude)
                             exif.saveAttributes()
                             val name = "GTC_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(date)}.jpg"
                             val values = ContentValues().apply {
@@ -284,6 +471,7 @@ class MainActivity : AppCompatActivity() {
                             contentResolver.openOutputStream(uri)?.use { out -> temp.inputStream().use { it.copyTo(out) } } ?: error("Cannot write photo")
                             val record = makeRecord(name, uri.toString(), "PHOTO", date, location)
                             AppStore.save(this@MainActivity, record)
+                            resolveAddress(record)
                             runOnUiThread { updateWatermark(record); startActivity(android.content.Intent(this@MainActivity, MediaDetailActivity::class.java).putExtra("mediaId", record.id)) }
                         } catch (e: Exception) { runOnUiThread { toast("Photo save failed: ${e.message}") } }
                         finally { temp.delete(); busy = false; runOnUiThread { shutter.isEnabled = true; statusView.text = "Camera ready • GPS recorded when available." } }
@@ -360,6 +548,7 @@ class MainActivity : AppCompatActivity() {
             geoFile.delete()
             val record = makeRecord(name, uri.toString(), "VIDEO", date, location)
             AppStore.save(this, record)
+            resolveAddress(record)
             runOnUiThread { startActivity(android.content.Intent(this, MediaDetailActivity::class.java).putExtra("mediaId", record.id)) }
         } catch (e: Exception) { runOnUiThread { toast("Video save failed: ${e.message}") } }
     }
@@ -368,17 +557,44 @@ class MainActivity : AppCompatActivity() {
         MediaRecord(
             id = name, uri = uri, name = name, type = type,
             capturedAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply { timeZone = TimeZone.getDefault() }.format(date),
-            timeZone = TimeZone.getDefault().id, latitude = location?.latitude, longitude = location?.longitude, accuracy = location?.accuracy
+            timeZone = TimeZone.getDefault().id, latitude = location?.latitude, longitude = location?.longitude,
+            accuracy = location?.accuracy, heading = lastHeadingDegrees
         )
+
+    private fun resolveAddress(record: MediaRecord) {
+        if (record.latitude == null || record.longitude == null || !Geocoder.isPresent()) return
+        worker.execute {
+            try {
+                @Suppress("DEPRECATION")
+                val address = Geocoder(this, Locale.getDefault()).getFromLocation(record.latitude!!, record.longitude!!, 1)
+                    ?.firstOrNull()?.getAddressLine(0).orEmpty()
+                if (address.isNotBlank()) {
+                    record.address = address
+                    AppStore.save(this, record)
+                }
+            } catch (_: Exception) { }
+        }
+    }
 
     private fun updateWatermark(record: MediaRecord) {
         watermarkText.text = "${record.capturedAt.replace("T", " ")}\n${AppStore.fmtLocation(record)}\n${record.accuracy?.let { "Accuracy ±${it.toInt()} m" } ?: "GPS unavailable"}"
         if (record.latitude != null && record.longitude != null) Thread {
-            val bitmap = AppStore.mapTile(this, record.latitude!!, record.longitude!!) ?: AppStore.mapPlaceholder()
-            runOnUiThread { mapThumb.setImageBitmap(bitmap) }
-        }.start()
+            val bitmap = AppStore.mapTile(this, record.latitude!!, record.longitude!!)
+            runOnUiThread {
+                if (bitmap != null) {
+                    mapThumb.visibility = View.VISIBLE
+                    mapThumb.setImageBitmap(bitmap)
+                } else {
+                    mapThumb.visibility = View.GONE
+                    watermarkText.text = watermarkText.text.toString() + "\nMap unavailable offline"
+                }
+            }
+        } else {
+            mapThumb.visibility = View.GONE
+            watermarkText.text = watermarkText.text.toString() + "\nLocation unavailable"
+        }
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    override fun onDestroy() { recording?.stop(); worker.shutdown(); super.onDestroy() }
+    override fun onDestroy() { stopLocationUpdates(); recording?.stop(); worker.shutdown(); super.onDestroy() }
 }

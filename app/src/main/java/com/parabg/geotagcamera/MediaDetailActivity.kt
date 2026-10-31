@@ -48,7 +48,7 @@ class MediaDetailActivity : AppCompatActivity() {
         preview.addView(watermark, android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or if (right) Gravity.END else Gravity.START).apply { setMargins(dp(8), dp(8), dp(8), dp(8)) })
         root.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8); bottomMargin = dp(8) })
         val detailsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setImageBitmap(AppStore.mapPlaceholder(120)) }
+        val mapThumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = if (record.latitude != null && record.longitude != null) android.view.View.VISIBLE else android.view.View.GONE }
         detailsRow.addView(mapThumb, LinearLayout.LayoutParams(dp(78), dp(78)))
         val metadata = TextView(this).apply {
             text = "${record.capturedAt.replace("T", " ")}\n${AppStore.fmtLocation(record)}\n${record.accuracy?.let { "Accuracy ±${it.toInt()} m" } ?: "Accuracy unavailable"}\nTimezone: ${record.timeZone}\nType: ${record.type}"
@@ -69,12 +69,16 @@ class MediaDetailActivity : AppCompatActivity() {
         actions.addView(button("Share") { share() }, actionParams())
         actions.addView(button("Map") { openMap() }, actionParams())
         if (record.type == "PHOTO") actions.addView(button("Watermark copy") { exportWatermark() }, actionParams())
+        if (record.type == "VIDEO") actions.addView(button("Watermark video") { exportWatermarkedVideo() }, actionParams())
         actions.addView(button("Delete") { delete() }, actionParams())
         root.addView(actions)
         setContentView(root); applySystemBarInsets(root)
         if (record.latitude != null && record.longitude != null) io.execute {
-            val tile = AppStore.mapTile(this, record.latitude!!, record.longitude!!) ?: AppStore.mapPlaceholder()
-            runOnUiThread { mapThumb.setImageBitmap(tile) }
+            val tile = AppStore.mapTile(this, record.latitude!!, record.longitude!!)
+            runOnUiThread {
+                if (tile != null) mapThumb.setImageBitmap(tile)
+                else mapThumb.visibility = android.view.View.GONE
+            }
         }
     }
 
@@ -85,11 +89,29 @@ class MediaDetailActivity : AppCompatActivity() {
         Toast.makeText(this, "Media details saved", Toast.LENGTH_SHORT).show()
     }
     private fun share() {
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = if (record.type == "VIDEO") "video/mp4" else "image/jpeg"
-            putExtra(Intent.EXTRA_STREAM, Uri.parse(record.uri)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        saveMetadata()
+        if (record.type == "PHOTO") {
+            Toast.makeText(this, "Creating a watermarked share copy…", Toast.LENGTH_SHORT).show()
+            io.execute {
+                val shareUri = AppStore.watermarkedPhoto(this, record)
+                runOnUiThread {
+                    if (shareUri == null) Toast.makeText(this, "Could not create watermarked copy", Toast.LENGTH_LONG).show()
+                    else {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/jpeg"; putExtra(Intent.EXTRA_STREAM, shareUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(send, "Share watermarked worksite photo"))
+                    }
+                }
+            }
+        } else {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"; putExtra(Intent.EXTRA_STREAM, Uri.parse(record.uri))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Share worksite video"))
         }
-        startActivity(Intent.createChooser(send, "Share worksite ${record.type.lowercase()}"))
     }
     private fun openMap() {
         if (record.latitude == null || record.longitude == null) return Toast.makeText(this, "No GPS coordinates for this media", Toast.LENGTH_SHORT).show()
@@ -105,9 +127,25 @@ class MediaDetailActivity : AppCompatActivity() {
             }
         }
     }
+    private fun exportWatermarkedVideo() {
+        saveMetadata()
+        Toast.makeText(this, "Exporting watermarked video. This may take time and use battery.", Toast.LENGTH_LONG).show()
+        VideoWatermarkExporter.export(this, record) { result ->
+            result.onSuccess {
+                Toast.makeText(this, "Watermarked video saved to Movies / GeoTag Worksite Camera / Exports", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(this, "Video watermark export failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun delete() {
-        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Delete media?").setMessage("This deletes the saved media and its app metadata from this device.")
-            .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> AppStore.delete(this, record); finish() }.show()
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Move to Recently Deleted?")
+            .setMessage("This removes the media from the main gallery but keeps the original file so you can restore it later.")
+            .setNegativeButton("Cancel", null).setPositiveButton("Move to Trash") { _, _ ->
+                AppStore.moveToTrash(this, record)
+                finish()
+            }.show()
     }
     private fun button(label: String, click: () -> Unit) = Button(this).apply {
         text = label; isAllCaps = false; textSize = 9f; setTextColor(Color.WHITE)
