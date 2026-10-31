@@ -64,7 +64,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("androidx.media3:media3-transformer:1.11.1")
-    implementation("androidx.media3:media3-effect:1.11.1")
-    implementation("androidx.media3:media3-common:1.11.1")
+    implementation("androidx.media3:media3-transformer:1.10.1")
+    implementation("androidx.media3:media3-effect:1.10.1")
+    implementation("androidx.media3:media3-common:1.10.1")
 }
