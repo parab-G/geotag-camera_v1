@@ -149,17 +149,25 @@ class GalleryActivity : AppCompatActivity() {
             })
             return
         }
-        if (viewMode == "GRID") {
-            val columns = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else
-                if (resources.displayMetrics.widthPixels / resources.displayMetrics.density >= 430) 3 else 2
-            records.chunked(columns).forEach { rowRecords ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                rowRecords.forEach { record -> row.addView(gridTile(record), LinearLayout.LayoutParams(0, dp(190), 1f).apply { marginEnd = dp(6); bottomMargin = dp(7) }) }
-                repeat(columns - rowRecords.size) { row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
-                list.addView(row)
+        val groupedByDay = records.groupBy { it.capturedAt.take(10).ifBlank { "Date unknown" } }
+        groupedByDay.forEach { (day, dayRecords) ->
+            list.addView(TextView(this).apply {
+                text = day
+                setTextColor(yellow); textSize = 12f; typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(3), dp(10), 0, dp(5))
+            })
+            if (viewMode == "GRID") {
+                val columns = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else
+                    if (resources.displayMetrics.widthPixels / resources.displayMetrics.density >= 430) 3 else 2
+                dayRecords.chunked(columns).forEach { rowRecords ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                    rowRecords.forEach { record -> row.addView(gridTile(record), LinearLayout.LayoutParams(0, dp(190), 1f).apply { marginEnd = dp(6); bottomMargin = dp(7) }) }
+                    repeat(columns - rowRecords.size) { row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
+                    list.addView(row)
+                }
+            } else {
+                dayRecords.forEach { addListItem(it) }
             }
-        } else {
-            records.forEach { addListItem(it) }
         }
     }
 
