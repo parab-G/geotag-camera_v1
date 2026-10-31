@@ -83,6 +83,152 @@ object AppStore {
         return list.sortedByDescending { it.capturedAt }.toMutableList()
     }
 
+
+    /**
+     * One-time recovery scan after an app reinstall/update migration. Old test builds stored
+     * original captures in public Pictures/Movies folders while their JSON sidecars lived in
+     * app-private storage. Rebuild only the metadata that can be recovered from the media file.
+     */
+    fun importExistingMedia(context: Context): Int {
+        val prefs = context.getSharedPreferences("camera_settings", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("legacy_media_scan_v1_complete", false)) return 0
+        var imported = 0
+        try {
+            val existingUris = all(context).map { it.uri }.toHashSet()
+            val photoCount = importMediaCollection(
+                context,
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                "PHOTO",
+                Environment.DIRECTORY_PICTURES + "/GeoTag Worksite Camera/"
+            ) { it !in existingUris }
+            imported += photoCount
+            val videoCount = importMediaCollection(
+                context,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                "VIDEO",
+                Environment.DIRECTORY_MOVIES + "/GeoTag Worksite Camera/"
+            ) { it !in existingUris }
+            imported += videoCount
+            prefs.edit().putBoolean("legacy_media_scan_v1_complete", true).apply()
+        } catch (_: SecurityException) {
+            // Do not mark completed if a permission prevented the scan; retry next time.
+        } catch (_: Exception) {
+            // A failed scan is retried on the next app launch.
+        }
+        return imported
+    }
+
+    private fun importMediaCollection(
+        context: Context,
+        collection: Uri,
+        type: String,
+        relativeDirectory: String,
+        shouldImport: (String) -> Boolean
+    ): Int {
+        val columns = mutableListOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.DATE_ADDED,
+            MediaStore.MediaColumns.DATE_MODIFIED
+        )
+        if (Build.VERSION.SDK_INT >= 29) {
+            columns.add(MediaStore.MediaColumns.RELATIVE_PATH)
+            if (type == "PHOTO") columns.add(MediaStore.Images.ImageColumns.DATE_TAKEN)
+        } else {
+            columns.add(MediaStore.MediaColumns.DATA)
+        }
+        var count = 0
+        val sort = MediaStore.MediaColumns.DATE_ADDED + " DESC"
+        context.contentResolver.query(collection, columns.toTypedArray(), null, null, sort)?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val addedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+            val modifiedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
+            val relativeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+            val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+            val takenIndex = if (type == "PHOTO") cursor.getColumnIndex(MediaStore.Images.ImageColumns.DATE_TAKEN) else -1
+            while (cursor.moveToNext()) {
+                val relative = if (relativeIndex >= 0) cursor.getString(relativeIndex).orEmpty() else ""
+                if (relativeIndex >= 0 && !relative.equals(relativeDirectory, true)) continue
+                if (dataIndex >= 0) {
+                    val data = cursor.getString(dataIndex).orEmpty()
+                    val expectedParent = File(Environment.getExternalStorageDirectory(), relativeDirectory.trimEnd('/')).absolutePath
+                    if (File(data).parentFile?.absolutePath != expectedParent) continue
+                }
+                val mediaId = cursor.getLong(idIndex)
+                val uri = Uri.withAppendedPath(collection, mediaId.toString())
+                val uriString = uri.toString()
+                if (!shouldImport(uriString) || all(context).any { it.uri == uriString }) continue
+                val name = cursor.getString(nameIndex) ?: "Recovered media"
+                val added = if (addedIndex >= 0) cursor.getLong(addedIndex) * 1000L else System.currentTimeMillis()
+                val modified = if (modifiedIndex >= 0) cursor.getLong(modifiedIndex) * 1000L else added
+                val taken = if (takenIndex >= 0 && !cursor.isNull(takenIndex)) cursor.getLong(takenIndex) else 0L
+                val date = if (taken > 0L) taken else if (modified > 0L) modified else added
+                val timeZone = TimeZone.getDefault()
+                var latitude: Double? = null
+                var longitude: Double? = null
+                var captureTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply {
+                    this.timeZone = timeZone
+                }.format(Date(date))
+                if (type == "PHOTO") {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            val exif = ExifInterface(stream)
+                            val coords = FloatArray(2)
+                            if (exif.getLatLong(coords)) {
+                                latitude = coords[0].toDouble()
+                                longitude = coords[1].toDouble()
+                            }
+                            val dateText = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                            val offset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
+                            if (!dateText.isNullOrBlank()) {
+                                val pattern = if (!offset.isNullOrBlank()) "yyyy:MM:dd HH:mm:ssXXX" else "yyyy:MM:dd HH:mm:ss"
+                                val combined = if (!offset.isNullOrBlank()) dateText + offset else dateText
+                                val parsed = try {
+                                    SimpleDateFormat(pattern, Locale.US).apply {
+                                        if (offset.isNullOrBlank()) this.timeZone = timeZone
+                                    }.parse(combined)
+                                } catch (_: Exception) { null }
+                                if (parsed != null) {
+                                    captureTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
+                                        .apply { this.timeZone = timeZone }.format(parsed)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) { }
+                } else {
+                    try {
+                        val retriever = android.media.MediaMetadataRetriever()
+                        retriever.setDataSource(context, uri)
+                        val location = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_LOCATION)
+                        retriever.release()
+                        if (!location.isNullOrBlank()) {
+                            val match = Regex("([+-]\\d{2}(?:\\.\\d+)?)([+-]\\d{3}(?:\\.\\d+)?)/?").find(location)
+                            if (match != null) {
+                                latitude = match.groupValues[1].toDoubleOrNull()
+                                longitude = match.groupValues[2].toDoubleOrNull()
+                            }
+                        }
+                    } catch (_: Exception) { }
+                }
+                val record = MediaRecord(
+                    id = "recovered_${mediaId}_${type.lowercase()}",
+                    uri = uriString,
+                    name = name,
+                    type = type,
+                    capturedAt = captureTime,
+                    timeZone = timeZone.id,
+                    latitude = latitude,
+                    longitude = longitude,
+                    locationStatus = if (latitude != null && longitude != null) "AVAILABLE" else "UNAVAILABLE"
+                )
+                save(context, record)
+                count++
+            }
+        }
+        return count
+    }
+
     fun find(context: Context, id: String) = all(context).firstOrNull { it.id == id }
 
     fun delete(context: Context, record: MediaRecord) {
