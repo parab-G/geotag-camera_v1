@@ -140,8 +140,12 @@ class MediaDetailActivity : AppCompatActivity() {
     }
 
     private fun delete() {
-        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Delete media?").setMessage("This deletes the saved media and its app metadata from this device.")
-            .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> AppStore.delete(this, record); finish() }.show()
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Move to Recently Deleted?")
+            .setMessage("This removes the media from the main gallery but keeps the original file so you can restore it later.")
+            .setNegativeButton("Cancel", null).setPositiveButton("Move to Trash") { _, _ ->
+                AppStore.moveToTrash(this, record)
+                finish()
+            }.show()
     }
     private fun button(label: String, click: () -> Unit) = Button(this).apply {
         text = label; isAllCaps = false; textSize = 9f; setTextColor(Color.WHITE)
