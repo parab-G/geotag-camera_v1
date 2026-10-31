@@ -32,6 +32,9 @@ class GalleryActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val galleryPrefs = getSharedPreferences("camera_settings", MODE_PRIVATE)
+        viewMode = galleryPrefs.getString("gallery_default_view", "GRID") ?: "GRID"
+        newestFirst = galleryPrefs.getBoolean("gallery_newest_first", true)
         projectFilter = intent.getStringExtra("projectFilter") ?: ""
         unassignedOnly = intent.getBooleanExtra("unassignedOnly", false)
         val root = LinearLayout(this).apply {
@@ -63,9 +66,9 @@ class GalleryActivity : AppCompatActivity() {
 
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         listOf("GRID", "LIST", "MAP").forEach { mode ->
-            controls.addView(actionButton(mode) { viewMode = mode; render() }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(4) })
+            controls.addView(actionButton(mode) { viewMode = mode; getSharedPreferences("camera_settings", MODE_PRIVATE).edit().putString("gallery_default_view", mode).apply(); render() }, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(4) })
         }
-        controls.addView(actionButton(if (newestFirst) "Newest ↓" else "Oldest ↑") { newestFirst = !newestFirst; render() })
+        controls.addView(actionButton(if (newestFirst) "Newest ↓" else "Oldest ↑") { newestFirst = !newestFirst; getSharedPreferences("camera_settings", MODE_PRIVATE).edit().putBoolean("gallery_newest_first", newestFirst).apply(); render() })
         root.addView(controls)
 
         val filters = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
