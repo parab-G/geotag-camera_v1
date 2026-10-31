@@ -249,6 +249,7 @@ object AppStore {
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.rgb(226, 233, 226))
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        var hasActualTile = false
         for (dy in -1..1) for (dx in -1..1) {
             val tile = mapTileXY(context, chosenZoom, centerX + dx, centerY + dy)
             if (tile != null) {
@@ -259,7 +260,6 @@ object AppStore {
                 tile.recycle()
             }
         }
-        var hasActualTile = false
         // Only show actual tiles; never use a generic illustration as a location map.
         valid.forEachIndexed { index, record ->
             val pLat = Math.toRadians(record.latitude!!.coerceIn(-85.0, 85.0))
