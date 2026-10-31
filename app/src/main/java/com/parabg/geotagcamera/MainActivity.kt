@@ -469,7 +469,8 @@ class MainActivity : AppCompatActivity() {
         MediaRecord(
             id = name, uri = uri, name = name, type = type,
             capturedAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply { timeZone = TimeZone.getDefault() }.format(date),
-            timeZone = TimeZone.getDefault().id, latitude = location?.latitude, longitude = location?.longitude, accuracy = location?.accuracy
+            timeZone = TimeZone.getDefault().id, latitude = location?.latitude, longitude = location?.longitude,
+            accuracy = location?.accuracy, heading = lastHeadingDegrees
         )
 
     private fun resolveAddress(record: MediaRecord) {
