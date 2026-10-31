@@ -82,12 +82,12 @@ class ReportActivity : AppCompatActivity() {
         orientationGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
         orientationGroup.addView(RadioButton(this).apply { id = 1; text = "Portrait"; setTextColor(Color.WHITE) })
         orientationGroup.addView(RadioButton(this).apply { id = 2; text = "Landscape"; setTextColor(Color.WHITE) })
-        orientationGroup.check(1)
+        orientationGroup.check(if (getSharedPreferences("camera_settings", MODE_PRIVATE).getString("pdf_orientation", "PORTRAIT") == "LANDSCAPE") 2 else 1)
         root.addView(orientationGroup)
 
         root.addView(sectionLabel("Photographs per page"))
         itemCount = TextView(this).apply { text = "2"; setTextColor(yellow); gravity = Gravity.CENTER; textSize = 15f }
-        itemSeek = SeekBar(this).apply { max = 9; progress = 1; progressTintList = android.content.res.ColorStateList.valueOf(yellow); thumbTintList = android.content.res.ColorStateList.valueOf(yellow) }
+        itemSeek = SeekBar(this).apply { max = 9; progress = (getSharedPreferences("camera_settings", MODE_PRIVATE).getInt("pdf_photos_per_page", 2) - 1).coerceIn(0, 9); progressTintList = android.content.res.ColorStateList.valueOf(yellow); thumbTintList = android.content.res.ColorStateList.valueOf(yellow) }
         itemSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { itemCount.text = (progress + 1).toString() }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -157,6 +157,9 @@ class ReportActivity : AppCompatActivity() {
         val company = companyInput.text.toString().trim()
         getSharedPreferences("camera_settings", MODE_PRIVATE).edit().putString("company_name", company).apply()
         val perPage = itemSeek.progress + 1
+        getSharedPreferences("camera_settings", MODE_PRIVATE).edit()
+            .putInt("pdf_photos_per_page", perPage)
+            .putString("pdf_orientation", if (landscape) "LANDSCAPE" else "PORTRAIT").apply()
         val landscape = orientationGroup.checkedRadioButtonId == 2
         val projectLabel = chosen.map { it.project }.filter { it.isNotBlank() }.distinct().joinToString(", ")
         Toast.makeText(this, "Generating PDF report…", Toast.LENGTH_SHORT).show()
