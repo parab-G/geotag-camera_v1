@@ -40,7 +40,12 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.util.Consumer
 import androidx.exifinterface.media.ExifInterface
+import androidx.window.java.layout.WindowInfoTrackerCallbackAdapter
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowLayoutInfo
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -64,6 +69,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var zoomLabel: TextView
     private lateinit var mapThumb: ImageView
     private lateinit var watermarkText: TextView
+    private lateinit var rootContainer: LinearLayout
+    private lateinit var previewColumn: LinearLayout
+    private lateinit var controlPanel: LinearLayout
+    private val windowTracker by lazy { WindowInfoTrackerCallbackAdapter(WindowInfoTracker.getOrCreate(this)) }
+    private val windowLayoutCallback = Consumer<WindowLayoutInfo> { info ->
+        val separatingFold = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull { it.isSeparating }
+        runOnUiThread { applyAdaptiveLayout(separatingFold) }
+    }
+    private var activeFoldingFeature: FoldingFeature? = null
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
     @Volatile private var latestLocation: android.location.Location? = null
     @Volatile private var bestLocation: android.location.Location? = null
@@ -136,6 +150,16 @@ class MainActivity : AppCompatActivity() {
         requestPermissionsIfNeeded()
     }
 
+    override fun onStart() {
+        super.onStart()
+        windowTracker.addWindowLayoutInfoListener(this, ContextCompat.getMainExecutor(this), windowLayoutCallback)
+    }
+
+    override fun onStop() {
+        windowTracker.removeWindowLayoutInfoListener(windowLayoutCallback)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         if (hasLocation()) startLocationUpdates()
@@ -152,11 +176,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildScreen() {
         val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        val root = LinearLayout(this).apply {
+        rootContainer = LinearLayout(this).apply {
             orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.rgb(16, 25, 35))
         }
-        val previewColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val root = rootContainer
+        previewColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8))
             setBackgroundColor(Color.rgb(16, 25, 35))
@@ -192,17 +217,66 @@ class MainActivity : AppCompatActivity() {
             setMargins(dp(10), dp(10), dp(10), dp(10))
         })
         previewColumn.addView(frame, LinearLayout.LayoutParams(-1, 0, 1f))
-        val controls = buildControls()
-        if (landscape) {
-            root.addView(previewColumn, LinearLayout.LayoutParams(0, -1, 1f))
-            root.addView(controls, LinearLayout.LayoutParams(dp(230), -1))
-        } else {
-            root.addView(previewColumn, LinearLayout.LayoutParams(-1, 0, 1f))
-            root.addView(controls, LinearLayout.LayoutParams(-1, -2))
-        }
-        setContentView(root)
+        controlPanel = buildControls()
+        setContentView(rootContainer)
         setVideoMode(getSharedPreferences("camera_settings", MODE_PRIVATE).getString("default_capture_mode", "PHOTO") == "VIDEO")
-        applySystemBarInsets(root)
+        applySystemBarInsets(rootContainer)
+        applyAdaptiveLayout(null)
+    }
+
+    /**
+     * Adapt the camera and control panes to the actual app window. When a separating fold
+     * is present, place preview and controls in opposite panes and keep the hinge clear.
+     */
+    private fun applyAdaptiveLayout(feature: FoldingFeature?) {
+        if (!::rootContainer.isInitialized || !::previewColumn.isInitialized || !::controlPanel.isInitialized) return
+        activeFoldingFeature = feature
+        rootContainer.removeAllViews()
+        val density = resources.displayMetrics.density
+        val widthPx = (resources.configuration.screenWidthDp * density).toInt()
+            .takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val heightPx = rootContainer.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+
+        if (feature != null && feature.isSeparating && feature.orientation == FoldingFeature.Orientation.VERTICAL) {
+            val leftPane = feature.bounds.left
+            val rightPane = widthPx - feature.bounds.right
+            val hingeGap = feature.bounds.width() + dp(12)
+            if (leftPane > dp(170) && rightPane > dp(170) && leftPane + rightPane + dp(12) <= widthPx) {
+                rootContainer.orientation = LinearLayout.HORIZONTAL
+                rootContainer.addView(previewColumn, LinearLayout.LayoutParams((leftPane - dp(6)).coerceAtLeast(dp(160)), -1))
+                rootContainer.addView(View(this), LinearLayout.LayoutParams(hingeGap, -1))
+                rootContainer.addView(controlPanel, LinearLayout.LayoutParams((rightPane - dp(6)).coerceAtLeast(dp(160)), -1))
+                rootContainer.requestLayout()
+                return
+            }
+        }
+
+        if (feature != null && feature.isSeparating && feature.orientation == FoldingFeature.Orientation.HORIZONTAL) {
+            val topPane = feature.bounds.top
+            val bottomPane = heightPx - feature.bounds.bottom
+            val hingeGap = feature.bounds.height() + dp(12)
+            if (topPane > dp(140) && bottomPane > dp(170) && topPane + bottomPane + dp(12) <= heightPx) {
+                rootContainer.orientation = LinearLayout.VERTICAL
+                rootContainer.addView(previewColumn, LinearLayout.LayoutParams(-1, (topPane - dp(6)).coerceAtLeast(dp(130))))
+                rootContainer.addView(View(this), LinearLayout.LayoutParams(-1, hingeGap))
+                rootContainer.addView(controlPanel, LinearLayout.LayoutParams(-1, (bottomPane - dp(6)).coerceAtLeast(dp(160))))
+                rootContainer.requestLayout()
+                return
+            }
+        }
+
+        val wideWindow = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
+            resources.configuration.screenWidthDp >= 600
+        if (wideWindow) {
+            rootContainer.orientation = LinearLayout.HORIZONTAL
+            rootContainer.addView(previewColumn, LinearLayout.LayoutParams(0, -1, 1f))
+            rootContainer.addView(controlPanel, LinearLayout.LayoutParams(dp(260), -1))
+        } else {
+            rootContainer.orientation = LinearLayout.VERTICAL
+            rootContainer.addView(previewColumn, LinearLayout.LayoutParams(-1, 0, 1f))
+            rootContainer.addView(controlPanel, LinearLayout.LayoutParams(-1, -2))
+        }
+        rootContainer.requestLayout()
     }
 
     private fun buildControls(): LinearLayout {
